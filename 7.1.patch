@@ -1,0 +1,13 @@
+diff --git a/repo/playwright.config.ts b/repo/playwright.config.ts
+index ec35bd8..069f0d6 100644
+--- a/repo/playwright.config.ts
++++ b/repo/playwright.config.ts
+@@ -1,7 +1,7 @@
+ import { defineConfig, devices } from '@playwright/test'
+ 
+ export default defineConfig({
+-  testDir: './tests/e2e',
++  testDir: './e2e',
+   timeout: 30000,
+   expect: {
+     timeout: 5000,
