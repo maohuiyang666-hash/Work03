@@ -1,0 +1,346 @@
+diff --git a/repo/package.json b/repo/package.json
+index 4cd2d7f..2aa5167 100644
+--- a/repo/package.json
++++ b/repo/package.json
+@@ -4,8 +4,12 @@
+   "type": "module",
+   "scripts": {
+     "dev": "vite",
+-    "build": "tsc && vite build",
+-    "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
++    "typecheck": "tsc --noEmit",
++    "lint": "npm exec --package=eslint@9.39.1 --package=@eslint/js@9.39.1 --package=typescript-eslint@8.46.4 --package=globals@16.4.0 --package=eslint-plugin-react-hooks@7.0.1 --package=eslint-plugin-react-refresh@0.4.24 -- eslint \"src/**/*.{ts,tsx}\" \"tests/**/*.{ts,tsx}\" vite.config.ts playwright.config.ts vitest.setup.ts --max-warnings 0",
++    "test": "npm exec --package=vitest@3.2.4 --package=jsdom@27.1.0 --package=@testing-library/react@16.3.0 --package=@testing-library/user-event@14.6.1 --package=@testing-library/jest-dom@6.9.1 -- vitest run",
++    "test:coverage": "npm exec --package=vitest@3.2.4 --package=@vitest/coverage-v8@3.2.4 --package=jsdom@27.1.0 --package=@testing-library/react@16.3.0 --package=@testing-library/user-event@14.6.1 --package=@testing-library/jest-dom@6.9.1 -- vitest run --coverage",
++    "e2e": "npm exec --package=@playwright/test@1.58.2 -- playwright test",
++    "build": "npm run typecheck && vite build",
+     "preview": "vite preview"
+   },
+   "dependencies": {
+diff --git a/repo/src/App.tsx b/repo/src/App.tsx
+index 4470419..f3464e4 100644
+--- a/repo/src/App.tsx
++++ b/repo/src/App.tsx
+@@ -98,21 +98,47 @@ const TOWER_COSTS: Record<string, PaintEssence> = {
+   yellow: { red: 0, blue: 0, yellow: 30 },
+ };
+ 
+-export default function CanvasDefender() {
+-  const [gameState, setGameState] = useState<'menu' | 'playing' | 'paused' | 'gameOver' | 'victory'>('menu');
+-  const [wave, setWave] = useState(1);
+-  const [coreHealth, setCoreHealth] = useState(100);
+-  const [paint, setPaint] = useState<PaintEssence>({ red: 50, blue: 50, yellow: 50 });
+-  const [enemies, setEnemies] = useState<Enemy[]>([]);
+-  const [towers, setTowers] = useState<Tower[]>([]);
+-  const [projectiles, setProjectiles] = useState<Projectile[]>([]);
+-  const [particles, setParticles] = useState<Particle[]>([]);
+-  const [selectedTowerType, setSelectedTowerType] = useState<'red' | 'blue' | 'yellow' | null>(null);
+-  const [selectedStyle, setSelectedStyle] = useState<'pencil' | 'watercolor' | 'oil'>('pencil');
+-  const [score, setScore] = useState(0);
+-  const [enemiesKilled, setEnemiesKilled] = useState(0);
+-  const [waveInProgress, setWaveInProgress] = useState(false);
+-  const [collectedTowers, setCollectedTowers] = useState<Set<string>>(new Set());
++type GameState = 'menu' | 'playing' | 'paused' | 'gameOver' | 'victory';
++type TowerType = 'red' | 'blue' | 'yellow';
++type TowerStyle = 'pencil' | 'watercolor' | 'oil';
++
++interface CanvasDefenderInitialState {
++  gameState: GameState;
++  wave: number;
++  coreHealth: number;
++  paint: PaintEssence;
++  enemies: Enemy[];
++  towers: Tower[];
++  projectiles: Projectile[];
++  particles: Particle[];
++  selectedTowerType: TowerType | null;
++  selectedStyle: TowerStyle;
++  score: number;
++  enemiesKilled: number;
++  waveInProgress: boolean;
++  collectedTowers: Set<string>;
++}
++
++interface CanvasDefenderProps {
++  initialState?: Partial<CanvasDefenderInitialState>;
++  disableAutoLoop?: boolean;
++}
++
++export default function CanvasDefender({ initialState, disableAutoLoop = false }: CanvasDefenderProps = {}) {
++  const [gameState, setGameState] = useState<GameState>(initialState?.gameState ?? 'menu');
++  const [wave, setWave] = useState(initialState?.wave ?? 1);
++  const [coreHealth, setCoreHealth] = useState(initialState?.coreHealth ?? 100);
++  const [paint, setPaint] = useState<PaintEssence>(initialState?.paint ?? { red: 50, blue: 50, yellow: 50 });
++  const [enemies, setEnemies] = useState<Enemy[]>(initialState?.enemies ?? []);
++  const [towers, setTowers] = useState<Tower[]>(initialState?.towers ?? []);
++  const [projectiles, setProjectiles] = useState<Projectile[]>(initialState?.projectiles ?? []);
++  const [particles, setParticles] = useState<Particle[]>(initialState?.particles ?? []);
++  const [selectedTowerType, setSelectedTowerType] = useState<TowerType | null>(initialState?.selectedTowerType ?? null);
++  const [selectedStyle, setSelectedStyle] = useState<TowerStyle>(initialState?.selectedStyle ?? 'pencil');
++  const [score, setScore] = useState(initialState?.score ?? 0);
++  const [enemiesKilled, setEnemiesKilled] = useState(initialState?.enemiesKilled ?? 0);
++  const [waveInProgress, setWaveInProgress] = useState(initialState?.waveInProgress ?? false);
++  const [collectedTowers, setCollectedTowers] = useState<Set<string>>(() => initialState?.collectedTowers ?? new Set());
+ 
+   const gameLoopRef = useRef<number | null>(null);
+   const enemyIdRef = useRef(0);
+@@ -415,6 +441,10 @@ export default function CanvasDefender() {
+   }, [gameState, enemies, wave, waveInProgress, spawnEnemy]);
+ 
+   useEffect(() => {
++    if (disableAutoLoop) {
++      return;
++    }
++
+     lastUpdateRef.current = Date.now();
+     gameLoopRef.current = requestAnimationFrame(gameLoop);
+     return () => {
+@@ -422,7 +452,7 @@ export default function CanvasDefender() {
+         cancelAnimationFrame(gameLoopRef.current);
+       }
+     };
+-  }, [gameLoop]);
++  }, [disableAutoLoop, gameLoop]);
+ 
+   const startGame = () => {
+     setGameState('playing');
+@@ -437,6 +467,8 @@ export default function CanvasDefender() {
+     setEnemiesKilled(0);
+     setWaveInProgress(false);
+     setSelectedTowerType(null);
++    setSelectedStyle('pencil');
++    setCollectedTowers(new Set());
+     enemyIdRef.current = 0;
+     towerIdRef.current = 0;
+     projectileIdRef.current = 0;
+@@ -497,6 +529,7 @@ export default function CanvasDefender() {
+             
+             <button
+               onClick={startGame}
++              data-testid="start-game-button"
+               className="px-10 py-4 bg-gradient-to-r from-amber-500 to-orange-500 text-white rounded-2xl text-2xl font-bold hover:from-amber-600 hover:to-orange-600 transition-all transform hover:scale-105 shadow-lg active:scale-95"
+             >
+               ✏️ 开始绘制冒险！
+@@ -521,7 +554,7 @@ export default function CanvasDefender() {
+                     <div className="h-full bg-red-500 transition-all" style={{ width: `${Math.min(100, paint.red)}%` }}></div>
+                   </div>
+                 </div>
+-                <span className="font-bold text-red-600 w-8 text-right">{paint.red}</span>
++                <span data-testid="resource-red-value" className="font-bold text-red-600 w-8 text-right">{paint.red}</span>
+               </div>
+               <div className="flex items-center gap-2 p-2 bg-blue-50 rounded-lg">
+                 <div className="w-6 h-6 rounded-full bg-blue-500 shadow-inner"></div>
+@@ -531,7 +564,7 @@ export default function CanvasDefender() {
+                     <div className="h-full bg-blue-500 transition-all" style={{ width: `${Math.min(100, paint.blue)}%` }}></div>
+                   </div>
+                 </div>
+-                <span className="font-bold text-blue-600 w-8 text-right">{paint.blue}</span>
++                <span data-testid="resource-blue-value" className="font-bold text-blue-600 w-8 text-right">{paint.blue}</span>
+               </div>
+               <div className="flex items-center gap-2 p-2 bg-yellow-50 rounded-lg">
+                 <div className="w-6 h-6 rounded-full bg-yellow-500 shadow-inner"></div>
+@@ -541,7 +574,7 @@ export default function CanvasDefender() {
+                     <div className="h-full bg-yellow-500 transition-all" style={{ width: `${Math.min(100, paint.yellow)}%` }}></div>
+                   </div>
+                 </div>
+-                <span className="font-bold text-yellow-600 w-8 text-right">{paint.yellow}</span>
++                <span data-testid="resource-yellow-value" className="font-bold text-yellow-600 w-8 text-right">{paint.yellow}</span>
+               </div>
+             </div>
+ 
+@@ -553,6 +586,9 @@ export default function CanvasDefender() {
+               {(['red', 'blue', 'yellow'] as const).map(type => (
+                 <button
+                   key={type}
++                  type="button"
++                  data-testid={`tower-button-${type}`}
++                  aria-pressed={selectedTowerType === type}
+                   onClick={() => setSelectedTowerType(selectedTowerType === type ? null : type)}
+                   className={`w-full p-2 rounded-xl border-2 transition-all flex items-center gap-2 ${
+                     selectedTowerType === type
+@@ -585,6 +621,9 @@ export default function CanvasDefender() {
+               {(['pencil', 'watercolor', 'oil'] as const).map(style => (
+                 <button
+                   key={style}
++                  type="button"
++                  data-testid={`style-button-${style}`}
++                  aria-pressed={selectedStyle === style}
+                   onClick={() => setSelectedStyle(style)}
+                   className={`p-2 rounded-lg text-xs font-medium transition-all ${
+                     selectedStyle === style
+@@ -603,26 +642,27 @@ export default function CanvasDefender() {
+           </div>
+ 
+           <div className="flex flex-col items-center">
+-            <div className="flex items-center gap-6 mb-2 bg-white px-6 py-2 rounded-full shadow-lg border-2 border-amber-300">
+-              <div className="text-amber-800 font-bold flex items-center gap-1">
++            <div className="flex items-center gap-6 mb-2 bg-white px-6 py-2 rounded-full shadow-lg border-2 border-amber-300" data-testid="game-status-bar">
++              <div className="text-amber-800 font-bold flex items-center gap-1" data-testid="status-wave">
+                 <span className="text-xl">🌊</span>
+                 <span>波次 {wave}/10</span>
+               </div>
+-              <div className="text-red-600 font-bold flex items-center gap-1">
++              <div className="text-red-600 font-bold flex items-center gap-1" data-testid="status-core-health">
+                 <span className="text-xl">❤️</span>
+                 <span>{coreHealth}</span>
+               </div>
+-              <div className="text-amber-600 font-bold flex items-center gap-1">
++              <div className="text-amber-600 font-bold flex items-center gap-1" data-testid="status-score">
+                 <span className="text-xl">⭐</span>
+                 <span>{score}</span>
+               </div>
+-              <div className="text-green-600 font-bold flex items-center gap-1">
++              <div className="text-green-600 font-bold flex items-center gap-1" data-testid="status-kills">
+                 <span className="text-xl">💀</span>
+                 <span>{enemiesKilled}</span>
+               </div>
+             </div>
+ 
+             <div className="relative bg-white rounded-xl shadow-2xl border-4 border-amber-400 overflow-hidden"
++                 data-testid="game-board"
+                  style={{ width: GRID_SIZE * CELL_SIZE, height: GRID_SIZE * CELL_SIZE,
+                           backgroundImage: 'repeating-linear-gradient(0deg, transparent, transparent 49px, #f3e5d0 50px), repeating-linear-gradient(90deg, transparent, transparent 49px, #f3e5d0 50px)' }}>
+               
+@@ -691,7 +731,7 @@ export default function CanvasDefender() {
+                   <div className="w-12 h-12 rounded-full bg-gradient-to-br from-yellow-300 via-pink-400 to-blue-400 shadow-lg flex items-center justify-center border-4 border-white">
+                     <span className="text-xl">💎</span>
+                   </div>
+-                  <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 bg-white px-2 rounded-full text-xs font-bold text-red-500 shadow">
++                  <div data-testid="core-health-display" className="absolute -bottom-1 left-1/2 -translate-x-1/2 bg-white px-2 rounded-full text-xs font-bold text-red-500 shadow">
+                     {coreHealth}
+                   </div>
+                 </div>
+@@ -718,6 +758,10 @@ export default function CanvasDefender() {
+                 
+                 return (
+                   <div key={i}
++                       role="button"
++                       tabIndex={0}
++                       data-testid={`grid-cell-${x}-${y}`}
++                       aria-label={`grid-cell-${x}-${y}`}
+                        className={`absolute cursor-pointer transition-all ${
+                          selectedTowerType && canPlace
+                            ? 'hover:bg-green-300 hover:bg-opacity-40 hover:border-2 hover:border-green-500 hover:border-dashed'
+@@ -729,13 +773,21 @@ export default function CanvasDefender() {
+                          width: CELL_SIZE,
+                          height: CELL_SIZE,
+                        }}
+-                       onClick={() => placeTower(x, y)}>
++                       onClick={() => placeTower(x, y)}
++                       onKeyDown={event => {
++                         if (event.key === 'Enter' || event.key === ' ') {
++                           placeTower(x, y);
++                         }
++                       }}>
+                   </div>
+                 );
+               })}
+ 
+               {towers.map(tower => (
+                 <div key={tower.id}
++                     data-testid={`tower-${tower.id}`}
++                     data-tower-type={tower.type}
++                     data-tower-style={tower.style}
+                      className="absolute flex flex-col items-center justify-center cursor-pointer group tower-brush"
+                      style={{
+                        left: tower.x * CELL_SIZE + 2,
+@@ -835,6 +887,7 @@ export default function CanvasDefender() {
+             <div className="flex gap-3 mt-3">
+               {!waveInProgress ? (
+                 <button onClick={startWave}
++                        data-testid="start-wave-button"
+                         className="px-6 py-3 bg-gradient-to-r from-green-500 to-emerald-500 text-white rounded-full font-bold hover:from-green-600 hover:to-emerald-600 transition-all transform hover:scale-105 shadow-lg">
+                   🚀 开始第 {wave} 波 {wave > 1 && `(+10全部精华)`}
+                 </button>
+@@ -905,7 +958,7 @@ export default function CanvasDefender() {
+               </div>
+               <div className="flex justify-between items-center p-1.5 bg-blue-50 rounded-lg">
+                 <span className="text-gray-600">防御塔数</span>
+-                <span className="font-bold text-blue-600">{towers.length}</span>
++                <span data-testid="tower-count" className="font-bold text-blue-600">{towers.length}</span>
+               </div>
+             </div>
+ 
+@@ -922,7 +975,7 @@ export default function CanvasDefender() {
+       )}
+ 
+       {gameState === 'gameOver' && (
+-        <div className="text-center bg-white rounded-3xl shadow-2xl p-8 border-4 border-red-300 max-w-md transform -rotate-1">
++        <div data-testid="game-over-screen" className="text-center bg-white rounded-3xl shadow-2xl p-8 border-4 border-red-300 max-w-md transform -rotate-1">
+           <div className="transform rotate-1">
+             <h2 className="text-4xl font-bold text-red-600 mb-4" style={{ fontFamily: 'cursive' }}>
+               💔 画布被污染了...
+@@ -957,7 +1010,7 @@ export default function CanvasDefender() {
+       )}
+ 
+       {gameState === 'victory' && (
+-        <div className="text-center bg-white rounded-3xl shadow-2xl p-8 border-4 border-green-300 max-w-md transform rotate-1">
++        <div data-testid="victory-screen" className="text-center bg-white rounded-3xl shadow-2xl p-8 border-4 border-green-300 max-w-md transform rotate-1">
+           <div className="transform -rotate-1">
+             <h2 className="text-4xl font-bold text-green-600 mb-4" style={{ fontFamily: 'cursive' }}>
+               🎉 画布已守护成功！
+diff --git a/repo/tsconfig.json b/repo/tsconfig.json
+index dd12918..1189dbb 100644
+--- a/repo/tsconfig.json
++++ b/repo/tsconfig.json
+@@ -30,4 +30,4 @@
+       "path": "./tsconfig.node.json"
+     }
+   ]
+-}
+\ No newline at end of file
++}
+diff --git a/repo/tsconfig.node.json b/repo/tsconfig.node.json
+index 73dbb0b..b5a3431 100644
+--- a/repo/tsconfig.node.json
++++ b/repo/tsconfig.node.json
+@@ -9,4 +9,4 @@
+   "include": [
+     "vite.config.ts"
+   ]
+-}
+\ No newline at end of file
++}
+diff --git a/repo/vite.config.ts b/repo/vite.config.ts
+index 3cfcb7e..4657049 100644
+--- a/repo/vite.config.ts
++++ b/repo/vite.config.ts
+@@ -1,15 +1,29 @@
+ import { defineConfig } from 'vite'
+ import react from '@vitejs/plugin-react'
+-// https://vitejs.dev/config/
++
++const port = 4173
++
+ export default defineConfig({
+   plugins: [react()],
+   server: {
+-    port: 62248,   // 随机端口（由脚本生成）
+-    strictPort: false,     // 若被占用，Vite 会继续找下一个可用端口
+-    open: false
++    host: '127.0.0.1',
++    port,
++    strictPort: true,
++    open: false,
+   },
+   preview: {
+-    port: 62248,            // 预览端口保持默认，可按需改为随机
+-    strictPort: false
+-  }
+-})
+\ No newline at end of file
++    host: '127.0.0.1',
++    port,
++    strictPort: true,
++  },
++  test: {
++    environment: 'jsdom',
++    setupFiles: './vitest.setup.ts',
++    css: true,
++    coverage: {
++      provider: 'v8',
++      reporter: ['text', 'html'],
++      include: ['src/App.tsx'],
++    },
++  },
++} as never)
