@@ -1,0 +1,2390 @@
+diff --git a/repo/src/App.tsx b/repo/src/App.tsx
+index 4470419..ca24a66 100644
+--- a/repo/src/App.tsx
++++ b/repo/src/App.tsx
+@@ -1,11 +1,27 @@
+-import { useState, useEffect, useCallback, useRef } from 'react';
++import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
++
++type BaseElement = 'red' | 'blue' | 'yellow';
++type TowerElement = BaseElement | 'purple' | 'orange' | 'green' | 'white';
++type EnemyColorType = BaseElement | 'mixed';
++type TowerStyle = 'pencil' | 'watercolor' | 'oil';
++type ProjectileKind = 'normal' | 'freeze' | 'shock' | 'corrosion' | 'explosive' | 'chain' | 'prismatic';
++type StatusType = 'burn' | 'freeze' | 'shock' | 'corrosion' | 'burst';
++type ReactionType = 'steamBurst' | 'coolingBrittle' | 'chainConductive';
++type GameState = 'menu' | 'playing' | 'paused' | 'gameOver' | 'victory';
+ 
+-// 类型定义
+ interface Position {
+   x: number;
+   y: number;
+ }
+ 
++interface StatusEffect {
++  type: StatusType;
++  duration: number;
++  stacks: number;
++  potency: number;
++  sourceTowerId?: number;
++}
++
+ interface Enemy {
+   id: number;
+   x: number;
+@@ -13,34 +29,52 @@ interface Enemy {
+   health: number;
+   maxHealth: number;
+   speed: number;
++  baseSpeed: number;
+   color: string;
+-  colorType: 'red' | 'blue' | 'yellow' | 'mixed';
++  colorType: EnemyColorType;
+   pathIndex: number;
++  resistances: Record<BaseElement, number>;
++  weaknesses: BaseElement[];
++  immunities: StatusType[];
++  statuses: StatusEffect[];
++  reactionCooldowns: Partial<Record<ReactionType, number>>;
++  traitsLabel: string;
++  defeated: boolean;
+ }
+ 
+ interface Tower {
+   id: number;
+   x: number;
+   y: number;
+-  type: 'red' | 'blue' | 'yellow';
++  type: BaseElement;
++  fusionType: TowerElement;
+   level: number;
+   range: number;
+   damage: number;
+   attackSpeed: number;
+   lastAttack: number;
+-  style: 'pencil' | 'watercolor' | 'oil';
++  style: TowerStyle;
++  damageContribution: number;
++  shotsFired: number;
+ }
+ 
+ interface Projectile {
+   id: number;
+   x: number;
+   y: number;
+-  targetX: number;
+-  targetY: number;
++  targetId: number;
+   color: string;
+   speed: number;
+   damage: number;
+-  type: 'normal' | 'slow' | 'pierce';
++  kind: ProjectileKind;
++  sourceTowerId: number;
++  sourceFusionType: TowerElement;
++  elements: BaseElement[];
++  splashRadius: number;
++  chainLeft: number;
++  chainCount: number;
++  stage: number;
++  visitedEnemyIds: number[];
+ }
+ 
+ interface Particle {
+@@ -52,6 +86,18 @@ interface Particle {
+   life: number;
+   velocityX: number;
+   velocityY: number;
++  kind: 'spark' | 'ring' | 'mist';
++}
++
++interface ChainEffect {
++  id: number;
++  x1: number;
++  y1: number;
++  x2: number;
++  y2: number;
++  color: string;
++  life: number;
++  label: string;
+ }
+ 
+ interface PaintEssence {
+@@ -60,9 +106,16 @@ interface PaintEssence {
+   yellow: number;
+ }
+ 
+-// 游戏常量
++interface CombatLog {
++  id: number;
++  text: string;
++  color: string;
++}
++
+ const GRID_SIZE = 10;
+ const CELL_SIZE = 50;
++const BASE_ELEMENTS: BaseElement[] = ['red', 'blue', 'yellow'];
++const STATUS_ORDER: StatusType[] = ['freeze', 'corrosion', 'burn', 'shock', 'burst'];
+ 
+ const PATH: Position[] = [
+   { x: 0, y: 4 },
+@@ -75,31 +128,252 @@ const PATH: Position[] = [
+   { x: 9, y: 4 },
+ ];
+ 
+-const generatePathLines = () => {
+-  const lines: { x1: number; y1: number; x2: number; y2: number }[] = [];
+-  for (let i = 0; i < PATH.length - 1; i++) {
+-    lines.push({
+-      x1: PATH[i].x * CELL_SIZE + CELL_SIZE / 2,
+-      y1: PATH[i].y * CELL_SIZE + CELL_SIZE / 2,
+-      x2: PATH[i + 1].x * CELL_SIZE + CELL_SIZE / 2,
+-      y2: PATH[i + 1].y * CELL_SIZE + CELL_SIZE / 2,
+-    });
+-  }
+-  return lines;
+-};
+-
+-const PATH_LINES = generatePathLines();
+-
+ const CORE_POSITION = { x: 9, y: 4 };
+ 
+-const TOWER_COSTS: Record<string, PaintEssence> = {
++const PATH_LINES = PATH.slice(0, -1).map((point, index) => ({
++  x1: point.x * CELL_SIZE + CELL_SIZE / 2,
++  y1: point.y * CELL_SIZE + CELL_SIZE / 2,
++  x2: PATH[index + 1].x * CELL_SIZE + CELL_SIZE / 2,
++  y2: PATH[index + 1].y * CELL_SIZE + CELL_SIZE / 2,
++}));
++
++const PATH_CELLS = (() => {
++  const cells: Position[] = [];
++  for (let index = 0; index < PATH.length - 1; index += 1) {
++    const start = PATH[index];
++    const end = PATH[index + 1];
++    const minX = Math.min(start.x, end.x);
++    const maxX = Math.max(start.x, end.x);
++    const minY = Math.min(start.y, end.y);
++    const maxY = Math.max(start.y, end.y);
++    for (let x = minX; x <= maxX; x += 1) {
++      for (let y = minY; y <= maxY; y += 1) {
++        if (!cells.some(cell => cell.x === x && cell.y === y)) {
++          cells.push({ x, y });
++        }
++      }
++    }
++  }
++  return cells;
++})();
++
++const TOWER_COSTS: Record<BaseElement, PaintEssence> = {
+   red: { red: 30, blue: 0, yellow: 0 },
+   blue: { red: 0, blue: 30, yellow: 0 },
+   yellow: { red: 0, blue: 0, yellow: 30 },
+ };
+ 
++const ELEMENT_COLORS: Record<BaseElement, string> = {
++  red: '#e74c3c',
++  blue: '#3498db',
++  yellow: '#f39c12',
++};
++
++const FUSION_PALETTE: Record<TowerElement, { primary: string; secondary: string; accent: string; label: string }> = {
++  red: { primary: '#e74c3c', secondary: '#f87171', accent: '#7f1d1d', label: '烈焰塔' },
++  blue: { primary: '#3498db', secondary: '#7dd3fc', accent: '#1d4ed8', label: '寒冰塔' },
++  yellow: { primary: '#f39c12', secondary: '#fde047', accent: '#a16207', label: '雷电塔' },
++  purple: { primary: '#8e44ad', secondary: '#c084fc', accent: '#4c1d95', label: '腐蚀塔' },
++  orange: { primary: '#f97316', secondary: '#fdba74', accent: '#9a3412', label: '爆燃塔' },
++  green: { primary: '#22c55e', secondary: '#86efac', accent: '#166534', label: '导流塔' },
++  white: { primary: '#f8fafc', secondary: '#cbd5e1', accent: '#475569', label: '白核塔' },
++};
++
++const STATUS_META: Record<StatusType, { color: string; icon: string; label: string }> = {
++  burn: { color: '#ef4444', icon: '🔥', label: '灼烧' },
++  freeze: { color: '#38bdf8', icon: '❄️', label: '冻结' },
++  shock: { color: '#facc15', icon: '⚡', label: '电击' },
++  corrosion: { color: '#a855f7', icon: '🧪', label: '腐蚀' },
++  burst: { color: '#fb923c', icon: '💥', label: '爆裂' },
++};
++
++const STATUS_RULES: Record<StatusType, { duration: number; maxStacks: number; mode: 'stack' | 'refresh' }> = {
++  burn: { duration: 4.4, maxStacks: 5, mode: 'stack' },
++  freeze: { duration: 1.2, maxStacks: 1, mode: 'refresh' },
++  shock: { duration: 3.2, maxStacks: 4, mode: 'stack' },
++  corrosion: { duration: 4.5, maxStacks: 4, mode: 'stack' },
++  burst: { duration: 4.8, maxStacks: 1, mode: 'refresh' },
++};
++
++const REACTION_META: Record<ReactionType, { label: string; color: string }> = {
++  steamBurst: { label: '蒸汽爆发', color: '#f97316' },
++  coolingBrittle: { label: '冷却脆化', color: '#60a5fa' },
++  chainConductive: { label: '连锁导电', color: '#facc15' },
++};
++
++const TOWER_STYLE_ICON: Record<TowerStyle, string> = {
++  pencil: '✏️',
++  watercolor: '💧',
++  oil: '🖌️',
++};
++
++const MIXED_FORMS = [
++  {
++    color: '#8e44ad',
++    resistances: { red: 0.24, blue: 0.24, yellow: 0 },
++    weaknesses: ['yellow'] as BaseElement[],
++    immunities: ['corrosion'] as StatusType[],
++    label: '紫渍·双抗',
++  },
++  {
++    color: '#16a085',
++    resistances: { red: 0, blue: 0.24, yellow: 0.24 },
++    weaknesses: ['red'] as BaseElement[],
++    immunities: ['freeze'] as StatusType[],
++    label: '翠潮·导流',
++  },
++  {
++    color: '#d35400',
++    resistances: { red: 0.24, blue: 0, yellow: 0.24 },
++    weaknesses: ['blue'] as BaseElement[],
++    immunities: ['burst'] as StatusType[],
++    label: '琥焰·双抗',
++  },
++];
++
++const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
++
++const distanceBetween = (x1: number, y1: number, x2: number, y2: number) => {
++  const dx = x2 - x1;
++  const dy = y2 - y1;
++  return Math.sqrt(dx * dx + dy * dy);
++};
++
++const getStyleClass = (style: TowerStyle) => {
++  switch (style) {
++    case 'pencil':
++      return 'border-2 border-dashed';
++    case 'watercolor':
++      return 'opacity-85';
++    case 'oil':
++      return 'border-4';
++    default:
++      return '';
++  }
++};
++
++const isPathCell = (x: number, y: number) => PATH_CELLS.some(cell => cell.x === x && cell.y === y);
++
++const getStatus = (enemy: Enemy, type: StatusType) => enemy.statuses.find(status => status.type === type);
++
++const hasStatus = (enemy: Enemy, type: StatusType) => Boolean(getStatus(enemy, type));
++
++const sortStatuses = (statuses: StatusEffect[]) => [...statuses].sort((left, right) => STATUS_ORDER.indexOf(left.type) - STATUS_ORDER.indexOf(right.type));
++
++const getEnemyStatusSummary = (enemy: Enemy) => {
++  const ordered = sortStatuses(enemy.statuses);
++  if (ordered.length === 0) {
++    return '无';
++  }
++  return ordered.map(status => `${STATUS_META[status.type].icon}${status.stacks}`).join(' ');
++};
++
++const getFusionType = (tower: Tower, towers: Tower[]): TowerElement => {
++  const adjacentTypes = new Set<BaseElement>([tower.type]);
++
++  towers.forEach(otherTower => {
++    const manhattanDistance = Math.abs(otherTower.x - tower.x) + Math.abs(otherTower.y - tower.y);
++    if (otherTower.id !== tower.id && manhattanDistance === 1) {
++      adjacentTypes.add(otherTower.type);
++    }
++  });
++
++  if (adjacentTypes.size === 3) {
++    return 'white';
++  }
++
++  const key = [...adjacentTypes].sort().join('-');
++  if (key === 'blue-red') {
++    return 'purple';
++  }
++  if (key === 'red-yellow') {
++    return 'orange';
++  }
++  if (key === 'blue-yellow') {
++    return 'green';
++  }
++  return tower.type;
++};
++
++const refreshTowerFusions = (towers: Tower[]) => towers.map(tower => ({
++  ...tower,
++  fusionType: getFusionType(tower, towers),
++}));
++
++const getEnemyProfile = (wave: number, colorType: EnemyColorType) => {
++  if (colorType === 'red') {
++    return {
++      color: '#c0392b',
++      resistances: { red: 0.34, blue: 0, yellow: 0 },
++      weaknesses: ['blue'] as BaseElement[],
++      immunities: ['burn'] as StatusType[],
++      label: '赤焰·耐灼',
++      health: 46 + wave * 16,
++      speed: 36 + Math.min(wave * 3.2, 24),
++    };
++  }
++  if (colorType === 'blue') {
++    return {
++      color: '#2980b9',
++      resistances: { red: 0, blue: 0.34, yellow: 0 },
++      weaknesses: ['yellow'] as BaseElement[],
++      immunities: ['freeze'] as StatusType[],
++      label: '寒渍·耐冻',
++      health: 48 + wave * 15,
++      speed: 34 + Math.min(wave * 3.1, 22),
++    };
++  }
++  if (colorType === 'yellow') {
++    return {
++      color: '#d68910',
++      resistances: { red: 0, blue: 0, yellow: 0.34 },
++      weaknesses: ['red'] as BaseElement[],
++      immunities: ['shock'] as StatusType[],
++      label: '雷滴·绝缘',
++      health: 42 + wave * 14,
++      speed: 42 + Math.min(wave * 3.5, 26),
++    };
++  }
++
++  const mixed = MIXED_FORMS[Math.floor(Math.random() * MIXED_FORMS.length)];
++  return {
++    color: mixed.color,
++    resistances: mixed.resistances,
++    weaknesses: mixed.weaknesses,
++    immunities: mixed.immunities,
++    label: mixed.label,
++    health: 58 + wave * 20,
++    speed: 38 + Math.min(wave * 3.4, 24),
++  };
++};
++
++const createEnemy = (wave: number, id: number): Enemy => {
++  const availableTypes: EnemyColorType[] = wave >= 3 ? ['red', 'blue', 'yellow', 'mixed'] : ['red', 'blue', 'yellow'];
++  const colorType = availableTypes[Math.floor(Math.random() * availableTypes.length)];
++  const profile = getEnemyProfile(wave, colorType);
++  return {
++    id,
++    x: PATH[0].x * CELL_SIZE + CELL_SIZE / 2,
++    y: PATH[0].y * CELL_SIZE + CELL_SIZE / 2,
++    health: profile.health,
++    maxHealth: profile.health,
++    speed: profile.speed,
++    baseSpeed: profile.speed,
++    color: profile.color,
++    colorType,
++    pathIndex: 0,
++    resistances: { ...profile.resistances },
++    weaknesses: [...profile.weaknesses],
++    immunities: [...profile.immunities],
++    statuses: [],
++    reactionCooldowns: {},
++    traitsLabel: profile.label,
++    defeated: false,
++  };
++};
++
+ export default function CanvasDefender() {
+-  const [gameState, setGameState] = useState<'menu' | 'playing' | 'paused' | 'gameOver' | 'victory'>('menu');
++  const [gameState, setGameState] = useState<GameState>('menu');
+   const [wave, setWave] = useState(1);
+   const [coreHealth, setCoreHealth] = useState(100);
+   const [paint, setPaint] = useState<PaintEssence>({ red: 50, blue: 50, yellow: 50 });
+@@ -107,314 +381,826 @@ export default function CanvasDefender() {
+   const [towers, setTowers] = useState<Tower[]>([]);
+   const [projectiles, setProjectiles] = useState<Projectile[]>([]);
+   const [particles, setParticles] = useState<Particle[]>([]);
+-  const [selectedTowerType, setSelectedTowerType] = useState<'red' | 'blue' | 'yellow' | null>(null);
+-  const [selectedStyle, setSelectedStyle] = useState<'pencil' | 'watercolor' | 'oil'>('pencil');
++  const [selectedTowerType, setSelectedTowerType] = useState<BaseElement | null>(null);
++  const [selectedStyle, setSelectedStyle] = useState<TowerStyle>('pencil');
+   const [score, setScore] = useState(0);
+   const [enemiesKilled, setEnemiesKilled] = useState(0);
+   const [waveInProgress, setWaveInProgress] = useState(false);
+   const [collectedTowers, setCollectedTowers] = useState<Set<string>>(new Set());
++  const [combatLogs, setCombatLogs] = useState<CombatLog[]>([]);
++  const [chainEffects, setChainEffects] = useState<ChainEffect[]>([]);
++  const [highestChainCount, setHighestChainCount] = useState(0);
+ 
+   const gameLoopRef = useRef<number | null>(null);
+   const enemyIdRef = useRef(0);
+   const towerIdRef = useRef(0);
+   const projectileIdRef = useRef(0);
+   const particleIdRef = useRef(0);
++  const combatLogIdRef = useRef(0);
++  const chainEffectIdRef = useRef(0);
+   const lastUpdateRef = useRef(Date.now());
+   const enemiesSpawnedRef = useRef(0);
+   const spawnTimerRef = useRef(0);
+ 
+-  const getColorValue = (type: 'red' | 'blue' | 'yellow'): string => {
+-    const colors = {
+-      red: '#e74c3c',
+-      blue: '#3498db',
+-      yellow: '#f39c12',
+-    };
+-    return colors[type];
+-  };
++  const gameStateRef = useRef<GameState>('menu');
++  const waveRef = useRef(1);
++  const coreHealthRef = useRef(100);
++  const paintRef = useRef<PaintEssence>({ red: 50, blue: 50, yellow: 50 });
++  const enemiesRef = useRef<Enemy[]>([]);
++  const towersRef = useRef<Tower[]>([]);
++  const projectilesRef = useRef<Projectile[]>([]);
++  const particlesRef = useRef<Particle[]>([]);
++  const scoreRef = useRef(0);
++  const enemiesKilledRef = useRef(0);
++  const waveInProgressRef = useRef(false);
++  const combatLogsRef = useRef<CombatLog[]>([]);
++  const chainEffectsRef = useRef<ChainEffect[]>([]);
++  const highestChainCountRef = useRef(0);
++
++  const topDamageTowers = useMemo(
++    () => [...towers].sort((left, right) => right.damageContribution - left.damageContribution).slice(0, 5),
++    [towers],
++  );
+ 
+-  const getStyleClass = (style: string) => {
+-    switch (style) {
+-      case 'pencil': return 'border-2 border-dashed';
+-      case 'watercolor': return 'opacity-80';
+-      case 'oil': return 'border-4';
+-      default: return '';
+-    }
+-  };
++  const debugEnemies = useMemo(
++    () => [...enemies].sort((left, right) => right.pathIndex - left.pathIndex).slice(0, 6),
++    [enemies],
++  );
+ 
+-  const canPlaceTower = (x: number, y: number): boolean => {
+-    const isOnPath = PATH.some(p => Math.abs(p.x - x) < 0.5 && Math.abs(p.y - y) < 0.5);
+-    if (isOnPath && !(x === CORE_POSITION.x && y === CORE_POSITION.y)) return false;
+-    const hasTower = towers.some(t => t.x === x && t.y === y);
+-    if (hasTower) return false;
+-    if (x < 0 || x >= GRID_SIZE || y < 0 || y >= GRID_SIZE) return false;
+-    return true;
+-  };
++  const appendLog = useCallback((entries: CombatLog[], text: string, color: string) => {
++    const nextLogs = [{ id: combatLogIdRef.current++, text, color }, ...entries].slice(0, 8);
++    combatLogsRef.current = nextLogs;
++    return nextLogs;
++  }, []);
++
++  const syncWave = useCallback((nextWave: number) => {
++    waveRef.current = nextWave;
++    setWave(nextWave);
++  }, []);
++
++  const syncGameState = useCallback((nextState: GameState) => {
++    gameStateRef.current = nextState;
++    setGameState(nextState);
++  }, []);
++
++  const syncCoreHealth = useCallback((nextHealth: number) => {
++    coreHealthRef.current = nextHealth;
++    setCoreHealth(nextHealth);
++  }, []);
++
++  const syncPaint = useCallback((nextPaint: PaintEssence) => {
++    paintRef.current = nextPaint;
++    setPaint(nextPaint);
++  }, []);
++
++  const syncWaveProgress = useCallback((inProgress: boolean) => {
++    waveInProgressRef.current = inProgress;
++    setWaveInProgress(inProgress);
++  }, []);
++
++  const startWave = useCallback(() => {
++    if (waveInProgressRef.current || gameStateRef.current !== 'playing') {
++      return;
++    }
++    enemiesSpawnedRef.current = 0;
++    spawnTimerRef.current = 0;
++    highestChainCountRef.current = 0;
++    setHighestChainCount(0);
++    const nextLogs = appendLog([], `第 ${waveRef.current} 波开始：元素场域已激活`, '#92400e');
++    setCombatLogs(nextLogs);
++    syncWaveProgress(true);
++  }, [appendLog, syncWaveProgress]);
++
++  const canPlaceTower = useCallback((x: number, y: number) => {
++    if (x < 0 || x >= GRID_SIZE || y < 0 || y >= GRID_SIZE) {
++      return false;
++    }
++    if (isPathCell(x, y) && !(x === CORE_POSITION.x && y === CORE_POSITION.y)) {
++      return false;
++    }
++    return !towersRef.current.some(tower => tower.x === x && tower.y === y);
++  }, []);
+ 
+-  const placeTower = (x: number, y: number) => {
+-    if (!selectedTowerType || gameState !== 'playing') return;
+-    if (!canPlaceTower(x, y)) return;
++  const placeTower = useCallback((x: number, y: number) => {
++    const currentType = selectedTowerType;
++    if (!currentType || gameStateRef.current !== 'playing' || !canPlaceTower(x, y)) {
++      return;
++    }
+ 
+-    const cost = TOWER_COSTS[selectedTowerType];
+-    if (paint.red < cost.red || paint.blue < cost.blue || paint.yellow < cost.yellow) return;
++    const cost = TOWER_COSTS[currentType];
++    const currentPaint = paintRef.current;
++    if (currentPaint.red < cost.red || currentPaint.blue < cost.blue || currentPaint.yellow < cost.yellow) {
++      return;
++    }
+ 
+-    const styleMultiplier = selectedStyle === 'pencil' ? 0.8 : selectedStyle === 'watercolor' ? 1.0 : 1.2;
+-    const newTower: Tower = {
++    const styleMultiplier = selectedStyle === 'pencil' ? 0.82 : selectedStyle === 'watercolor' ? 1 : 1.2;
++    const baseTower: Tower = {
+       id: towerIdRef.current++,
+       x,
+       y,
+-      type: selectedTowerType,
++      type: currentType,
++      fusionType: currentType,
+       level: 1,
+-      range: 2.5,
+-      damage: Math.floor(15 * styleMultiplier),
+-      attackSpeed: selectedStyle === 'watercolor' ? 1200 : selectedStyle === 'pencil' ? 800 : 1500,
++      range: 2.6,
++      damage: Math.floor(16 * styleMultiplier),
++      attackSpeed: selectedStyle === 'watercolor' ? 1180 : selectedStyle === 'pencil' ? 820 : 1480,
+       lastAttack: 0,
+       style: selectedStyle,
++      damageContribution: 0,
++      shotsFired: 0,
+     };
+ 
+-    setTowers(prev => [...prev, newTower]);
+-    setPaint(prev => ({
+-      red: prev.red - cost.red,
+-      blue: prev.blue - cost.blue,
+-      yellow: prev.yellow - cost.yellow,
+-    }));
++    const nextTowers = refreshTowerFusions([...towersRef.current, baseTower]);
++    towersRef.current = nextTowers;
++    setTowers(nextTowers);
+ 
+-    const towerKey = `${selectedTowerType}-${selectedStyle}`;
+-    if (!collectedTowers.has(towerKey)) {
+-      setCollectedTowers(prev => new Set(prev).add(towerKey));
++    const nextPaint = {
++      red: currentPaint.red - cost.red,
++      blue: currentPaint.blue - cost.blue,
++      yellow: currentPaint.yellow - cost.yellow,
++    };
++    syncPaint(nextPaint);
++
++    const towerKey = `${currentType}-${selectedStyle}`;
++    setCollectedTowers(previous => {
++      const nextSet = new Set(previous);
++      nextSet.add(towerKey);
++      return nextSet;
++    });
++  }, [canPlaceTower, selectedStyle, selectedTowerType, syncPaint]);
++
++  const upgradeTower = useCallback((towerId: number) => {
++    const targetTower = towersRef.current.find(tower => tower.id === towerId);
++    if (!targetTower || targetTower.level >= 5) {
++      return;
+     }
+-  };
+ 
+-  const spawnEnemy = useCallback(() => {
+-    const colorTypes: Array<'red' | 'blue' | 'yellow' | 'mixed'> = ['red', 'blue', 'yellow'];
+-    if (wave >= 3) colorTypes.push('mixed');
+-    const type = colorTypes[Math.floor(Math.random() * colorTypes.length)];
+-    
+-    const colors = {
+-      red: '#c0392b',
+-      blue: '#2980b9',
+-      yellow: '#d68910',
+-      mixed: ['#8e44ad', '#16a085', '#d35400'][Math.floor(Math.random() * 3)],
+-    };
++    const cost = targetTower.level * 25;
++    if (paintRef.current[targetTower.type] < cost) {
++      return;
++    }
+ 
+-    const newEnemy: Enemy = {
+-      id: enemyIdRef.current++,
+-      x: PATH[0].x * CELL_SIZE + CELL_SIZE / 2,
+-      y: PATH[0].y * CELL_SIZE + CELL_SIZE / 2,
+-      health: 40 + wave * 15,
+-      maxHealth: 40 + wave * 15,
+-      speed: 35 + Math.min(wave * 3, 25),
+-      color: colors[type],
+-      colorType: type,
+-      pathIndex: 0,
++    const nextPaint = {
++      ...paintRef.current,
++      [targetTower.type]: paintRef.current[targetTower.type] - cost,
+     };
++    syncPaint(nextPaint);
++
++    const nextTowers = refreshTowerFusions(
++      towersRef.current.map(tower => (
++        tower.id === towerId
++          ? {
++              ...tower,
++              level: tower.level + 1,
++              damage: Math.floor(tower.damage * 1.32),
++              range: tower.range + 0.18,
++            }
++          : tower
++      )),
++    );
++
++    towersRef.current = nextTowers;
++    setTowers(nextTowers);
++  }, [syncPaint]);
++
++  const startGame = useCallback(() => {
++    syncGameState('playing');
++    syncWave(1);
++    syncCoreHealth(100);
++    syncPaint({ red: 50, blue: 50, yellow: 50 });
++    syncWaveProgress(false);
++
++    enemiesRef.current = [];
++    towersRef.current = [];
++    projectilesRef.current = [];
++    particlesRef.current = [];
++    combatLogsRef.current = [];
++    chainEffectsRef.current = [];
++    highestChainCountRef.current = 0;
++    scoreRef.current = 0;
++    enemiesKilledRef.current = 0;
+ 
+-    setEnemies(prev => [...prev, newEnemy]);
+-  }, [wave]);
++    setEnemies([]);
++    setTowers([]);
++    setProjectiles([]);
++    setParticles([]);
++    setCombatLogs([]);
++    setChainEffects([]);
++    setHighestChainCount(0);
++    setScore(0);
++    setEnemiesKilled(0);
++    setSelectedTowerType(null);
+ 
+-  const startWave = () => {
+-    if (waveInProgress) return;
+-    setWaveInProgress(true);
++    enemyIdRef.current = 0;
++    towerIdRef.current = 0;
++    projectileIdRef.current = 0;
++    particleIdRef.current = 0;
++    combatLogIdRef.current = 0;
++    chainEffectIdRef.current = 0;
+     enemiesSpawnedRef.current = 0;
+     spawnTimerRef.current = 0;
+-  };
+-
+-  const createParticles = (x: number, y: number, color: string, count: number = 5) => {
+-    const newParticles: Particle[] = [];
+-    for (let i = 0; i < count; i++) {
+-      newParticles.push({
+-        id: particleIdRef.current++,
+-        x,
+-        y,
+-        color,
+-        size: 4 + Math.random() * 4,
+-        life: 30 + Math.random() * 20,
+-        velocityX: (Math.random() - 0.5) * 4,
+-        velocityY: (Math.random() - 0.5) * 4,
+-      });
+-    }
+-    setParticles(prev => [...prev, ...newParticles]);
+-  };
++    lastUpdateRef.current = Date.now();
++  }, [syncCoreHealth, syncGameState, syncPaint, syncWave, syncWaveProgress]);
+ 
+-  const gameLoop = useCallback(() => {
+-    if (gameState !== 'playing') {
+-      gameLoopRef.current = requestAnimationFrame(gameLoop);
++  const togglePause = useCallback(() => {
++    if (gameStateRef.current === 'paused') {
++      lastUpdateRef.current = Date.now();
++      syncGameState('playing');
+       return;
+     }
++    if (gameStateRef.current === 'playing') {
++      syncGameState('paused');
++    }
++  }, [syncGameState]);
+ 
+-    const now = Date.now();
+-    const delta = (now - lastUpdateRef.current) / 1000;
+-    lastUpdateRef.current = now;
+-
+-    if (waveInProgress) {
+-      spawnTimerRef.current += delta;
+-      const enemiesPerWave = 5 + wave * 3;
+-      const spawnRate = 1.5 - Math.min(wave * 0.1, 0.8);
+-      
+-      if (enemiesSpawnedRef.current < enemiesPerWave && spawnTimerRef.current >= spawnRate) {
+-        spawnEnemy();
+-        enemiesSpawnedRef.current++;
+-        spawnTimerRef.current = 0;
++  useEffect(() => {
++    const gameLoop = () => {
++      if (gameStateRef.current !== 'playing') {
++        gameLoopRef.current = requestAnimationFrame(gameLoop);
++        return;
+       }
+ 
+-      if (enemiesSpawnedRef.current >= enemiesPerWave && enemies.length === 0) {
+-        setWaveInProgress(false);
+-        if (wave >= 10) {
+-          setGameState('victory');
+-        } else {
+-          const bonus: PaintEssence = { red: 10, blue: 10, yellow: 10 };
+-          setPaint(prev => ({
+-            red: prev.red + bonus.red,
+-            blue: prev.blue + bonus.blue,
+-            yellow: prev.yellow + bonus.yellow,
+-          }));
++      const now = Date.now();
++      const delta = Math.min((now - lastUpdateRef.current) / 1000, 0.05);
++      lastUpdateRef.current = now;
++
++      let localWave = waveRef.current;
++      let localCoreHealth = coreHealthRef.current;
++      let localPaint = { ...paintRef.current };
++      let localEnemies = enemiesRef.current.map(enemy => ({
++        ...enemy,
++        resistances: { ...enemy.resistances },
++        weaknesses: [...enemy.weaknesses],
++        immunities: [...enemy.immunities],
++        statuses: enemy.statuses.map(status => ({ ...status })),
++        reactionCooldowns: { ...enemy.reactionCooldowns },
++      }));
++      let localTowers = refreshTowerFusions(towersRef.current.map(tower => ({ ...tower })));
++      let localProjectiles = projectilesRef.current.map(projectile => ({
++        ...projectile,
++        elements: [...projectile.elements],
++        visitedEnemyIds: [...projectile.visitedEnemyIds],
++      }));
++      let localParticles = particlesRef.current.map(particle => ({ ...particle }));
++      let localLogs = [...combatLogsRef.current];
++      let localChainEffects = chainEffectsRef.current.map(effect => ({ ...effect }));
++      let localScore = scoreRef.current;
++      let localEnemiesKilled = enemiesKilledRef.current;
++      let localWaveInProgress = waveInProgressRef.current;
++      let localHighestChain = highestChainCountRef.current;
++
++      const spawnParticles = (x: number, y: number, color: string, count: number, spread = 4, kind: Particle['kind'] = 'spark') => {
++        for (let index = 0; index < count; index += 1) {
++          localParticles.push({
++            id: particleIdRef.current++,
++            x,
++            y,
++            color,
++            size: 4 + Math.random() * 4,
++            life: 24 + Math.random() * 24,
++            velocityX: (Math.random() - 0.5) * spread,
++            velocityY: (Math.random() - 0.5) * spread,
++            kind,
++          });
+         }
+-      }
+-    }
++      };
++
++      const spawnChainEffect = (x1: number, y1: number, x2: number, y2: number, color: string, label: string) => {
++        localChainEffects.push({
++          id: chainEffectIdRef.current++,
++          x1,
++          y1,
++          x2,
++          y2,
++          color,
++          life: 14,
++          label,
++        });
++      };
++
++      const addLog = (text: string, color: string) => {
++        localLogs = appendLog(localLogs, text, color);
++      };
++
++      const rewardEnemy = (enemy: Enemy) => {
++        const rewardElement: BaseElement = enemy.colorType === 'mixed'
++          ? enemy.weaknesses[0] ?? 'red'
++          : enemy.colorType;
++        const gain = 8 + Math.floor(enemy.maxHealth / 18) + (enemy.colorType === 'mixed' ? 4 : 0);
++        localPaint = {
++          ...localPaint,
++          [rewardElement]: localPaint[rewardElement] + gain,
++        };
++        localScore += 18 + Math.floor(enemy.maxHealth / 9);
++        localEnemiesKilled += 1;
++      };
+ 
+-    setEnemies(prev => {
+-      const updatedEnemies: Enemy[] = [];
+-      let damage = 0;
++      const findTower = (towerId: number) => localTowers.find(tower => tower.id === towerId);
+ 
+-      prev.forEach(enemy => {
+-        if (enemy.pathIndex >= PATH.length - 1) {
+-          damage += 10;
++      const addTowerDamage = (towerId: number | undefined, amount: number) => {
++        if (towerId === undefined || towerId < 0) {
+           return;
+         }
++        const tower = findTower(towerId);
++        if (tower) {
++          tower.damageContribution += amount;
++        }
++      };
+ 
+-        const target = {
+-          x: PATH[enemy.pathIndex + 1].x * CELL_SIZE + CELL_SIZE / 2,
+-          y: PATH[enemy.pathIndex + 1].y * CELL_SIZE + CELL_SIZE / 2,
+-        };
++      const setReactionCooldown = (enemy: Enemy, reaction: ReactionType, cooldownMs: number) => {
++        enemy.reactionCooldowns[reaction] = now + cooldownMs;
++      };
+ 
+-        const dx = target.x - enemy.x;
+-        const dy = target.y - enemy.y;
+-        const dist = Math.sqrt(dx * dx + dy * dy);
++      const reactionReady = (enemy: Enemy, reaction: ReactionType) => (enemy.reactionCooldowns[reaction] ?? 0) <= now;
+ 
+-        if (dist < 5) {
+-          enemy.pathIndex++;
++      const applyStatus = (enemy: Enemy, type: StatusType, stacks: number, duration: number, potency: number, sourceTowerId?: number) => {
++        if (enemy.immunities.includes(type)) {
++          return false;
++        }
++
++        const rule = STATUS_RULES[type];
++        const current = getStatus(enemy, type);
++        if (!current) {
++          enemy.statuses.push({
++            type,
++            stacks: clamp(stacks, 1, rule.maxStacks),
++            duration,
++            potency,
++            sourceTowerId,
++          });
++          return true;
++        }
++
++        current.duration = Math.max(current.duration, duration);
++        current.sourceTowerId = sourceTowerId ?? current.sourceTowerId;
++        if (rule.mode === 'stack') {
++          current.stacks = clamp(current.stacks + stacks, 1, rule.maxStacks);
++          current.potency = Math.max(current.potency, potency);
+         } else {
+-          enemy.x += (dx / dist) * enemy.speed * delta;
+-          enemy.y += (dy / dist) * enemy.speed * delta;
++          current.stacks = clamp(stacks, 1, rule.maxStacks);
++          current.potency = potency;
++        }
++        return true;
++      };
++
++      const removeStatus = (enemy: Enemy, type: StatusType) => {
++        enemy.statuses = enemy.statuses.filter(status => status.type !== type);
++      };
++
++      const getElementDamageMultiplier = (enemy: Enemy, elements: BaseElement[]) => {
++        const corrosionStacks = getStatus(enemy, 'corrosion')?.stacks ?? 0;
++        const total = elements.reduce((sum, element) => {
++          const resistance = clamp((enemy.resistances[element] ?? 0) - corrosionStacks * 0.08, -0.25, 0.7);
++          const weaknessBonus = enemy.weaknesses.includes(element) ? 0.24 : 0;
++          return sum + clamp(1 - resistance + weaknessBonus, 0.45, 1.65);
++        }, 0);
++        return total / elements.length;
++      };
++
++      const findChainTarget = (origin: Enemy, excludedIds: number[], radius: number) => {
++        const candidates = localEnemies
++          .filter(enemy => !enemy.defeated && enemy.health > 0 && !excludedIds.includes(enemy.id) && distanceBetween(origin.x, origin.y, enemy.x, enemy.y) <= radius)
++          .sort((left, right) => distanceBetween(origin.x, origin.y, left.x, left.y) - distanceBetween(origin.x, origin.y, right.x, right.y));
++        return candidates[0];
++      };
++
++      const handleEnemyDeath = (enemy: Enemy, sourceTowerId: number | undefined, allowDeathEffects = true) => {
++        if (enemy.defeated) {
++          return;
+         }
+ 
+-        updatedEnemies.push(enemy);
+-      });
++        enemy.defeated = true;
++        enemy.health = 0;
++        rewardEnemy(enemy);
++        spawnParticles(enemy.x, enemy.y, enemy.color, 8, 5, 'spark');
++
++        const burst = getStatus(enemy, 'burst');
++        if (allowDeathEffects && burst && !enemy.immunities.includes('burst')) {
++          localEnemies.forEach(otherEnemy => {
++            if (otherEnemy.id === enemy.id || otherEnemy.defeated || otherEnemy.health <= 0) {
++              return;
++            }
++            const dist = distanceBetween(enemy.x, enemy.y, otherEnemy.x, otherEnemy.y);
++            if (dist <= 78) {
++              const burstDamage = 12 + burst.stacks * 8;
++              const damage = Math.round(burstDamage * getElementDamageMultiplier(otherEnemy, ['red', 'yellow']));
++              otherEnemy.health -= damage;
++              addTowerDamage(sourceTowerId, damage);
++              spawnParticles(otherEnemy.x, otherEnemy.y, STATUS_META.burst.color, 4, 3, 'ring');
++              if (otherEnemy.health <= 0) {
++                handleEnemyDeath(otherEnemy, sourceTowerId, false);
++              }
++            }
++          });
++        }
+ 
+-      if (damage > 0) {
+-        setCoreHealth(h => Math.max(0, h - damage));
+-      }
++        const shock = getStatus(enemy, 'shock');
++        if (allowDeathEffects && shock && reactionReady(enemy, 'chainConductive')) {
++          setReactionCooldown(enemy, 'chainConductive', 600);
++          const visited = [enemy.id];
++          let currentEnemy = enemy;
++          let chainHits = 1;
++          for (let bounce = 0; bounce < Math.min(3, shock.stacks + 1); bounce += 1) {
++            const nextTarget = findChainTarget(currentEnemy, visited, 130);
++            if (!nextTarget) {
++              break;
++            }
++            visited.push(nextTarget.id);
++            chainHits += 1;
++            const chainDamage = Math.round((14 + shock.stacks * 5) * Math.pow(0.86, bounce));
++            spawnChainEffect(currentEnemy.x, currentEnemy.y, nextTarget.x, nextTarget.y, REACTION_META.chainConductive.color, REACTION_META.chainConductive.label);
++            spawnParticles(nextTarget.x, nextTarget.y, STATUS_META.shock.color, 4, 3, 'spark');
++            nextTarget.health -= Math.max(1, Math.round(chainDamage * getElementDamageMultiplier(nextTarget, ['yellow'])));
++            addTowerDamage(sourceTowerId, chainDamage);
++            currentEnemy = nextTarget;
++            if (nextTarget.health <= 0) {
++              handleEnemyDeath(nextTarget, sourceTowerId, false);
++            }
++          }
++          localHighestChain = Math.max(localHighestChain, chainHits);
++          addLog(`${REACTION_META.chainConductive.label}：敌人 ${enemy.id} 释放 ${chainHits} 段导电`, REACTION_META.chainConductive.color);
++        }
++      };
++
++      const applyReactionDamage = (originEnemy: Enemy, towerId: number, damage: number, elements: BaseElement[], radius: number, label: string, color: string) => {
++        localEnemies.forEach(otherEnemy => {
++          if (otherEnemy.id === originEnemy.id || otherEnemy.defeated || otherEnemy.health <= 0) {
++            return;
++          }
++          const dist = distanceBetween(originEnemy.x, originEnemy.y, otherEnemy.x, otherEnemy.y);
++          if (dist <= radius) {
++            const actualDamage = Math.max(1, Math.round(damage * getElementDamageMultiplier(otherEnemy, elements)));
++            otherEnemy.health -= actualDamage;
++            addTowerDamage(towerId, actualDamage);
++            spawnParticles(otherEnemy.x, otherEnemy.y, color, 4, 3, 'mist');
++            if (otherEnemy.health <= 0) {
++              handleEnemyDeath(otherEnemy, towerId, false);
++            }
++          }
++        });
++        spawnChainEffect(originEnemy.x - 24, originEnemy.y, originEnemy.x + 24, originEnemy.y, color, label);
++      };
++
++      const inflictStatusesByAttack = (enemy: Enemy, projectile: Projectile) => {
++        const baseStatusPower = Math.max(5, projectile.damage * 0.18);
++        const towerId = projectile.sourceTowerId;
++        if (projectile.sourceFusionType === 'red') {
++          applyStatus(enemy, 'burn', 1, STATUS_RULES.burn.duration, baseStatusPower, towerId);
++        } else if (projectile.sourceFusionType === 'blue') {
++          applyStatus(enemy, 'freeze', 1, STATUS_RULES.freeze.duration, 0, towerId);
++        } else if (projectile.sourceFusionType === 'yellow') {
++          applyStatus(enemy, 'shock', 1, STATUS_RULES.shock.duration, baseStatusPower * 0.5, towerId);
++        } else if (projectile.sourceFusionType === 'purple') {
++          applyStatus(enemy, 'burn', 1, 2.8, baseStatusPower * 0.6, towerId);
++          applyStatus(enemy, 'corrosion', 1, STATUS_RULES.corrosion.duration, 0.08, towerId);
++        } else if (projectile.sourceFusionType === 'orange') {
++          applyStatus(enemy, 'burn', 1, 3.4, baseStatusPower * 0.7, towerId);
++          applyStatus(enemy, 'burst', 1, STATUS_RULES.burst.duration, 0, towerId);
++        } else if (projectile.sourceFusionType === 'green') {
++          applyStatus(enemy, 'freeze', 1, 1.8, 0.55, towerId);
++          applyStatus(enemy, 'shock', 1, STATUS_RULES.shock.duration, baseStatusPower * 0.4, towerId);
++        } else if (projectile.sourceFusionType === 'white') {
++          if (projectile.stage === 0) {
++            applyStatus(enemy, 'burn', 1, 3.2, baseStatusPower * 0.6, towerId);
++            applyStatus(enemy, 'freeze', 1, 1, 0, towerId);
++            applyStatus(enemy, 'shock', 1, 2.4, baseStatusPower * 0.4, towerId);
++          } else if (projectile.stage === 1) {
++            applyStatus(enemy, 'corrosion', 1, 4.2, 0.12, towerId);
++            applyStatus(enemy, 'burst', 1, STATUS_RULES.burst.duration, 0, towerId);
++            applyStatus(enemy, 'burn', 1, 2.6, baseStatusPower * 0.5, towerId);
++          } else {
++            applyStatus(enemy, 'freeze', 1, 1.3, 0.2, towerId);
++            applyStatus(enemy, 'shock', 2, 3, baseStatusPower * 0.5, towerId);
++            applyStatus(enemy, 'corrosion', 1, 3.5, 0.12, towerId);
++          }
++        }
++      };
+ 
+-      return updatedEnemies;
+-    });
++      const applyAttackToEnemy = (enemy: Enemy, projectile: Projectile, allowReactions = true, allowDeathEffects = true) => {
++        if (enemy.defeated || enemy.health <= 0) {
++          return 0;
++        }
++
++        if (allowReactions && projectile.elements.includes('red') && hasStatus(enemy, 'freeze') && reactionReady(enemy, 'steamBurst')) {
++          setReactionCooldown(enemy, 'steamBurst', 550);
++          removeStatus(enemy, 'freeze');
++          addLog(`${REACTION_META.steamBurst.label}：敌人 ${enemy.id} 被蒸汽轰散`, REACTION_META.steamBurst.color);
++          applyReactionDamage(enemy, projectile.sourceTowerId, projectile.damage * 0.48, ['red', 'blue'], 75, REACTION_META.steamBurst.label, REACTION_META.steamBurst.color);
++          spawnParticles(enemy.x, enemy.y, '#fde68a', 6, 4, 'mist');
++        } else if (allowReactions && projectile.elements.includes('blue') && hasStatus(enemy, 'burn') && reactionReady(enemy, 'coolingBrittle')) {
++          setReactionCooldown(enemy, 'coolingBrittle', 550);
++          addLog(`${REACTION_META.coolingBrittle.label}：敌人 ${enemy.id} 抗性破碎`, REACTION_META.coolingBrittle.color);
++          applyStatus(enemy, 'corrosion', 1, 4.4, 0.12, projectile.sourceTowerId);
++          spawnParticles(enemy.x, enemy.y, '#bae6fd', 5, 3, 'mist');
++        }
+ 
+-    setCoreHealth(h => {
+-      if (h <= 0) {
+-        setGameState('gameOver');
++        const damageMultiplier = getElementDamageMultiplier(enemy, projectile.elements);
++        const actualDamage = Math.max(1, Math.round(projectile.damage * damageMultiplier));
++        enemy.health -= actualDamage;
++        addTowerDamage(projectile.sourceTowerId, actualDamage);
++        inflictStatusesByAttack(enemy, projectile);
++        spawnParticles(enemy.x, enemy.y, projectile.color, 3, 2.5, 'spark');
++
++        if (enemy.health <= 0) {
++          handleEnemyDeath(enemy, projectile.sourceTowerId, allowDeathEffects);
++        }
++        return actualDamage;
++      };
++
++      const resolveChainHits = (projectile: Projectile, startEnemy: Enemy, initialDamage: number, chainCount: number, radius: number) => {
++        let currentEnemy = startEnemy;
++        let localDamage = initialDamage;
++        const visited = [...projectile.visitedEnemyIds, startEnemy.id];
++        let totalChainCount = chainCount;
++
++        for (let bounce = 0; bounce < projectile.chainLeft; bounce += 1) {
++          const nextTarget = findChainTarget(currentEnemy, visited, radius);
++          if (!nextTarget) {
++            break;
++          }
++          visited.push(nextTarget.id);
++          totalChainCount += 1;
++          spawnChainEffect(currentEnemy.x, currentEnemy.y, nextTarget.x, nextTarget.y, projectile.color, totalChainCount === 2 ? '连锁' : '导流');
++          const chainedProjectile: Projectile = {
++            ...projectile,
++            damage: Math.max(1, Math.round(localDamage * 0.84)),
++            chainLeft: 0,
++            chainCount: totalChainCount,
++            visitedEnemyIds: [...visited],
++          };
++          applyAttackToEnemy(nextTarget, chainedProjectile, true, true);
++          currentEnemy = nextTarget;
++          localDamage = chainedProjectile.damage;
++        }
++
++        localHighestChain = Math.max(localHighestChain, totalChainCount);
++      };
++
++      if (localWaveInProgress) {
++        const enemiesPerWave = 6 + localWave * 3;
++        const spawnRate = Math.max(0.45, 1.45 - localWave * 0.08);
++        spawnTimerRef.current += delta;
++
++        while (enemiesSpawnedRef.current < enemiesPerWave && spawnTimerRef.current >= spawnRate) {
++          spawnTimerRef.current -= spawnRate;
++          localEnemies.push(createEnemy(localWave, enemyIdRef.current++));
++          enemiesSpawnedRef.current += 1;
++        }
+       }
+-      return h;
+-    });
+ 
+-    setTowers(prev => {
+-      const currentTime = Date.now();
+-      prev.forEach(tower => {
+-        if (currentTime - tower.lastAttack < tower.attackSpeed) return;
++      localTowers.forEach(tower => {
++        if (now - tower.lastAttack < tower.attackSpeed) {
++          return;
++        }
+ 
+         const towerCenterX = tower.x * CELL_SIZE + CELL_SIZE / 2;
+         const towerCenterY = tower.y * CELL_SIZE + CELL_SIZE / 2;
++        const target = localEnemies
++          .filter(enemy => !enemy.defeated && enemy.health > 0 && distanceBetween(towerCenterX, towerCenterY, enemy.x, enemy.y) <= tower.range * CELL_SIZE)
++          .sort((left, right) => right.pathIndex - left.pathIndex || left.health - right.health)[0];
+ 
+-        const inRange = enemies.filter(e => {
+-          const dist = Math.sqrt(
+-            Math.pow(e.x - towerCenterX, 2) + Math.pow(e.y - towerCenterY, 2)
+-          );
+-          return dist <= tower.range * CELL_SIZE;
+-        });
++        if (!target) {
++          return;
++        }
+ 
+-        if (inRange.length > 0) {
+-          const target = inRange[0];
+-          tower.lastAttack = currentTime;
+-
+-          const projectile: Projectile = {
+-            id: projectileIdRef.current++,
+-            x: towerCenterX,
+-            y: towerCenterY,
+-            targetX: target.x,
+-            targetY: target.y,
+-            color: getColorValue(tower.type),
+-            speed: 350,
+-            damage: tower.damage * tower.level,
+-            type: tower.type === 'blue' ? 'slow' : tower.type === 'yellow' ? 'pierce' : 'normal',
+-          };
++        tower.lastAttack = now;
++        tower.shotsFired += 1;
++
++        const fusion = tower.fusionType;
++        const palette = FUSION_PALETTE[fusion];
++        const projectile: Projectile = {
++          id: projectileIdRef.current++,
++          x: towerCenterX,
++          y: towerCenterY,
++          targetId: target.id,
++          color: palette.primary,
++          speed: fusion === 'white' ? 390 : fusion === 'green' ? 360 : 340,
++          damage: Math.round(tower.damage * tower.level * (fusion === 'white' ? 1.32 : fusion === 'orange' ? 1.18 : fusion === 'purple' ? 1.08 : fusion === 'green' ? 0.94 : fusion === 'yellow' ? 0.9 : fusion === 'blue' ? 0.92 : 1)),
++          kind: fusion === 'purple'
++            ? 'corrosion'
++            : fusion === 'orange'
++              ? 'explosive'
++              : fusion === 'green'
++                ? 'chain'
++                : fusion === 'white'
++                  ? 'prismatic'
++                  : fusion === 'blue'
++                    ? 'freeze'
++                    : fusion === 'yellow'
++                      ? 'shock'
++                      : 'normal',
++          sourceTowerId: tower.id,
++          sourceFusionType: fusion,
++          elements: fusion === 'purple'
++            ? ['red', 'blue']
++            : fusion === 'orange'
++              ? ['red', 'yellow']
++              : fusion === 'green'
++                ? ['blue', 'yellow']
++                : fusion === 'white'
++                  ? ['red', 'blue', 'yellow']
++                  : [tower.type],
++          splashRadius: fusion === 'orange' ? 82 : fusion === 'white' && tower.shotsFired % 3 === 2 ? 92 : fusion === 'white' && tower.shotsFired % 3 === 1 ? 62 : 0,
++          chainLeft: fusion === 'green' ? 3 : fusion === 'white' && tower.shotsFired % 3 === 0 ? 4 : fusion === 'yellow' ? 1 : 0,
++          chainCount: 1,
++          stage: fusion === 'white' ? tower.shotsFired % 3 : 0,
++          visitedEnemyIds: [],
++        };
+ 
+-          setProjectiles(p => [...p, projectile]);
+-        }
++        localProjectiles.push(projectile);
+       });
+-      return [...prev];
+-    });
+ 
+-    setProjectiles(prev => {
+-      const remaining: Projectile[] = [];
+-      
+-      prev.forEach(proj => {
+-        const dx = proj.targetX - proj.x;
+-        const dy = proj.targetY - proj.y;
+-        const dist = Math.sqrt(dx * dx + dy * dy);
++      const nextProjectiles: Projectile[] = [];
++      localProjectiles.forEach(projectile => {
++        const target = localEnemies.find(enemy => enemy.id === projectile.targetId && !enemy.defeated && enemy.health > 0);
++        if (!target) {
++          return;
++        }
+ 
+-        if (dist < 10) {
+-          setEnemies(enemies => {
+-            const updated = enemies.map(e => {
+-              const eDist = Math.sqrt(Math.pow(e.x - proj.x, 2) + Math.pow(e.y - proj.y, 2));
+-              const hitRange = proj.type === 'pierce' ? 60 : 25;
+-              
+-              if (eDist < hitRange) {
+-                createParticles(e.x, e.y, proj.color, 3);
+-                const newHealth = e.health - proj.damage;
+-                
+-                if (newHealth <= 0) {
+-                  const paintGain = 8 + Math.floor(e.maxHealth / 15);
+-                  const colorType = e.colorType === 'mixed' ? 
+-                    (['red', 'blue', 'yellow'] as const)[Math.floor(Math.random() * 3)] : 
+-                    e.colorType;
+-                  
+-                  setPaint((p: PaintEssence) => ({ ...p, [colorType]: p[colorType] + paintGain }));
+-                  setScore(s => s + 15 + Math.floor(e.maxHealth / 10));
+-                  setEnemiesKilled(k => k + 1);
+-                  createParticles(e.x, e.y, e.color, 8);
+-                  return { ...e, health: 0 };
+-                }
++        const dx = target.x - projectile.x;
++        const dy = target.y - projectile.y;
++        const distance = Math.sqrt(dx * dx + dy * dy);
+ 
+-                if (proj.type === 'slow') {
+-                  return { ...e, health: newHealth, speed: Math.max(15, e.speed * 0.7) };
+-                }
+-                
+-                return { ...e, health: newHealth };
++        if (distance <= projectile.speed * delta + 8) {
++          if (projectile.kind === 'explosive') {
++            localEnemies.forEach(enemy => {
++              if (enemy.defeated || enemy.health <= 0) {
++                return;
++              }
++              if (distanceBetween(target.x, target.y, enemy.x, enemy.y) <= projectile.splashRadius) {
++                applyAttackToEnemy(enemy, projectile, true, true);
+               }
+-              return e;
+-            }).filter(e => e.health > 0);
+-            
+-            return updated;
++            });
++            spawnParticles(target.x, target.y, STATUS_META.burst.color, 9, 5, 'ring');
++            spawnChainEffect(target.x - 28, target.y - 12, target.x + 28, target.y + 12, STATUS_META.burst.color, '爆燃');
++          } else if (projectile.kind === 'chain' || projectile.kind === 'shock') {
++            applyAttackToEnemy(target, projectile, true, true);
++            resolveChainHits(projectile, target, projectile.damage, projectile.chainCount, projectile.kind === 'chain' ? 135 : 105);
++          } else if (projectile.kind === 'prismatic') {
++            applyAttackToEnemy(target, projectile, true, true);
++            if (projectile.splashRadius > 0) {
++              localEnemies.forEach(enemy => {
++                if (enemy.id === target.id || enemy.defeated || enemy.health <= 0) {
++                  return;
++                }
++                if (distanceBetween(target.x, target.y, enemy.x, enemy.y) <= projectile.splashRadius) {
++                  applyAttackToEnemy(enemy, { ...projectile, damage: Math.round(projectile.damage * 0.72) }, false, true);
++                }
++              });
++            }
++            if (projectile.chainLeft > 0) {
++              resolveChainHits(projectile, target, Math.round(projectile.damage * 0.82), 1, 145);
++            }
++            spawnParticles(target.x, target.y, '#ffffff', 10, 6, 'ring');
++            spawnChainEffect(target.x - 34, target.y, target.x + 34, target.y, '#f8fafc', projectile.stage === 0 ? '白核·三相' : projectile.stage === 1 ? '白核·新星' : '白核·裁决');
++          } else {
++            applyAttackToEnemy(target, projectile, true, true);
++          }
++        } else {
++          nextProjectiles.push({
++            ...projectile,
++            x: projectile.x + (dx / distance) * projectile.speed * delta,
++            y: projectile.y + (dy / distance) * projectile.speed * delta,
+           });
++        }
++      });
++      localProjectiles = nextProjectiles;
++
++      localEnemies.forEach(enemy => {
++        if (enemy.defeated || enemy.health <= 0) {
++          return;
++        }
++
++        enemy.statuses = sortStatuses(enemy.statuses)
++          .map(status => ({ ...status, duration: status.duration - delta }))
++          .filter(status => status.duration > 0);
++
++        const burn = getStatus(enemy, 'burn');
++        const freeze = getStatus(enemy, 'freeze');
++        const shock = getStatus(enemy, 'shock');
++        const corrosion = getStatus(enemy, 'corrosion');
++        const burst = getStatus(enemy, 'burst');
++
++        if (burn) {
++          const burnDamage = burn.potency * burn.stacks * delta;
++          enemy.health -= burnDamage;
++          addTowerDamage(burn.sourceTowerId, burnDamage);
++          spawnParticles(enemy.x, enemy.y, STATUS_META.burn.color, Math.random() < 0.4 ? 1 : 0, 1.5, 'mist');
++        }
++        if (freeze && Math.random() < 0.35) {
++          spawnParticles(enemy.x, enemy.y, STATUS_META.freeze.color, 1, 1, 'mist');
++        }
++        if (shock && Math.random() < 0.3) {
++          spawnParticles(enemy.x, enemy.y, STATUS_META.shock.color, 1, 1.6, 'spark');
++        }
++        if (corrosion && Math.random() < 0.28) {
++          spawnParticles(enemy.x, enemy.y, STATUS_META.corrosion.color, 1, 1.2, 'mist');
++        }
++        if (burst && Math.random() < 0.2) {
++          spawnParticles(enemy.x, enemy.y, STATUS_META.burst.color, 1, 1.8, 'spark');
++        }
++
++        if (enemy.health <= 0) {
++          handleEnemyDeath(enemy, burn?.sourceTowerId ?? shock?.sourceTowerId ?? burst?.sourceTowerId, false);
++          return;
++        }
++
++        const moveMultiplier = freeze ? freeze.potency : 1;
++        enemy.speed = enemy.baseSpeed * moveMultiplier;
++
++        if (enemy.pathIndex >= PATH.length - 1) {
++          localCoreHealth = Math.max(0, localCoreHealth - 10);
++          enemy.defeated = true;
++          return;
++        }
++
++        if (moveMultiplier <= 0.02) {
++          return;
++        }
++
++        const targetPoint = {
++          x: PATH[enemy.pathIndex + 1].x * CELL_SIZE + CELL_SIZE / 2,
++          y: PATH[enemy.pathIndex + 1].y * CELL_SIZE + CELL_SIZE / 2,
++        };
++
++        const dx = targetPoint.x - enemy.x;
++        const dy = targetPoint.y - enemy.y;
++        const dist = Math.sqrt(dx * dx + dy * dy);
++
++        if (dist < 5) {
++          enemy.pathIndex += 1;
+         } else {
+-          proj.x += (dx / dist) * proj.speed * delta;
+-          proj.y += (dy / dist) * proj.speed * delta;
+-          remaining.push(proj);
++          enemy.x += (dx / dist) * enemy.speed * delta;
++          enemy.y += (dy / dist) * enemy.speed * delta;
+         }
+       });
+ 
+-      return remaining;
+-    });
++      localEnemies = localEnemies.filter(enemy => !enemy.defeated && enemy.health > 0);
++      localParticles = localParticles
++        .map(particle => ({
++          ...particle,
++          x: particle.x + particle.velocityX,
++          y: particle.y + particle.velocityY,
++          life: particle.life - 1,
++          size: particle.kind === 'ring' ? particle.size * 0.99 : particle.size * 0.95,
++        }))
++        .filter(particle => particle.life > 0);
++      localChainEffects = localChainEffects
++        .map(effect => ({ ...effect, life: effect.life - 1 }))
++        .filter(effect => effect.life > 0);
++
++      if (localCoreHealth <= 0) {
++        localCoreHealth = 0;
++        syncCoreHealth(localCoreHealth);
++        syncGameState('gameOver');
++      }
+ 
+-    setParticles(prev => prev.map(p => ({
+-      ...p,
+-      x: p.x + p.velocityX,
+-      y: p.y + p.velocityY,
+-      life: p.life - 1,
+-      size: p.size * 0.95,
+-    })).filter(p => p.life > 0));
++      if (localWaveInProgress) {
++        const enemiesPerWave = 6 + localWave * 3;
++        if (enemiesSpawnedRef.current >= enemiesPerWave && localEnemies.length === 0) {
++          localWaveInProgress = false;
++          const bonus: PaintEssence = { red: 10, blue: 10, yellow: 10 };
++          localPaint = {
++            red: localPaint.red + bonus.red,
++            blue: localPaint.blue + bonus.blue,
++            yellow: localPaint.yellow + bonus.yellow,
++          };
++          addLog(`第 ${localWave} 波完成：获得全元素补给 +10`, '#16a34a');
++          if (localWave >= 10) {
++            syncGameState('victory');
++          }
++        }
++      }
+ 
+-    gameLoopRef.current = requestAnimationFrame(gameLoop);
+-  }, [gameState, enemies, wave, waveInProgress, spawnEnemy]);
++      highestChainCountRef.current = localHighestChain;
++      enemiesRef.current = localEnemies;
++      towersRef.current = localTowers;
++      projectilesRef.current = localProjectiles;
++      particlesRef.current = localParticles;
++      chainEffectsRef.current = localChainEffects;
++      paintRef.current = localPaint;
++      coreHealthRef.current = localCoreHealth;
++      scoreRef.current = localScore;
++      enemiesKilledRef.current = localEnemiesKilled;
++      waveInProgressRef.current = localWaveInProgress;
++      combatLogsRef.current = localLogs;
++
++      setEnemies(localEnemies);
++      setTowers(localTowers);
++      setProjectiles(localProjectiles);
++      setParticles(localParticles);
++      setChainEffects(localChainEffects);
++      setPaint(localPaint);
++      setCoreHealth(localCoreHealth);
++      setScore(localScore);
++      setEnemiesKilled(localEnemiesKilled);
++      setWaveInProgress(localWaveInProgress);
++      setCombatLogs(localLogs);
++      setHighestChainCount(localHighestChain);
++
++      gameLoopRef.current = requestAnimationFrame(gameLoop);
++    };
+ 
+-  useEffect(() => {
+     lastUpdateRef.current = Date.now();
+     gameLoopRef.current = requestAnimationFrame(gameLoop);
+     return () => {
+@@ -422,79 +1208,60 @@ export default function CanvasDefender() {
+         cancelAnimationFrame(gameLoopRef.current);
+       }
+     };
+-  }, [gameLoop]);
++  }, [appendLog, syncCoreHealth, syncGameState]);
+ 
+-  const startGame = () => {
+-    setGameState('playing');
+-    setWave(1);
+-    setCoreHealth(100);
+-    setPaint({ red: 50, blue: 50, yellow: 50 });
+-    setEnemies([]);
+-    setTowers([]);
+-    setProjectiles([]);
+-    setParticles([]);
+-    setScore(0);
+-    setEnemiesKilled(0);
+-    setWaveInProgress(false);
+-    setSelectedTowerType(null);
+-    enemyIdRef.current = 0;
+-    towerIdRef.current = 0;
+-    projectileIdRef.current = 0;
+-    particleIdRef.current = 0;
+-    enemiesSpawnedRef.current = 0;
+-    spawnTimerRef.current = 0;
+-  };
+-
+-  const upgradeTower = (towerId: number) => {
+-    const tower = towers.find(t => t.id === towerId);
+-    if (!tower || tower.level >= 5) return;
+-    const cost = tower.level * 25;
+-    if (paint[tower.type] >= cost) {
+-      setPaint(prev => ({ ...prev, [tower.type]: prev[tower.type] - cost }));
+-      setTowers(prev => prev.map(t =>
+-        t.id === towerId
+-          ? { ...t, level: t.level + 1, damage: Math.floor(t.damage * 1.4), range: t.range + 0.2 }
+-          : t
+-      ));
+-    }
+-  };
++  const nextWavePreview = wave < 10 ? wave + 1 : 10;
+ 
+   return (
+-    <div className="min-h-screen bg-amber-50 flex flex-col items-center justify-center p-4"
+-         style={{ backgroundImage: 'repeating-linear-gradient(0deg, transparent, transparent 47px, #e8d5c4 48px), repeating-linear-gradient(90deg, transparent, transparent 47px, #e8d5c4 48px)' }}>
+-      
++    <div
++      className="min-h-screen bg-amber-50 flex flex-col items-center justify-center p-4"
++      style={{
++        backgroundImage:
++          'repeating-linear-gradient(0deg, transparent, transparent 47px, #e8d5c4 48px), repeating-linear-gradient(90deg, transparent, transparent 47px, #e8d5c4 48px)',
++      }}
++    >
+       {gameState === 'menu' && (
+-        <div className="text-center bg-white rounded-3xl shadow-2xl p-8 border-4 border-dashed border-amber-400 max-w-lg transform rotate-1">
++        <div className="text-center bg-white rounded-3xl shadow-2xl p-8 border-4 border-dashed border-amber-400 max-w-2xl transform rotate-1">
+           <div className="transform -rotate-1">
+-            <h1 className="text-5xl font-bold text-amber-700 mb-2" 
+-                style={{ fontFamily: 'cursive', textShadow: '3px 3px 0 #fcd34d' }}>
++            <h1
++              className="text-5xl font-bold text-amber-700 mb-2"
++              style={{ fontFamily: 'cursive', textShadow: '3px 3px 0 #fcd34d' }}
++            >
+               🎨 绘世守护者
+             </h1>
+             <p className="text-amber-600 mb-6 text-lg italic">Canvas Defender</p>
+-            
+-            <div className="mb-6 p-5 bg-gradient-to-br from-amber-50 to-orange-50 rounded-2xl border-2 border-amber-200 text-left">
+-              <h3 className="font-bold text-amber-800 mb-3 text-lg flex items-center">
+-                📜 游戏说明
+-              </h3>
+-              <ul className="text-amber-700 space-y-2 text-sm">
+-                <li className="flex items-start gap-2">
+-                  <span className="text-red-500">🔴</span>
+-                  <span><strong>红色颜料塔</strong>：高伤害单体攻击</span>
+-                </li>
+-                <li className="flex items-start gap-2">
+-                  <span className="text-blue-500">🔵</span>
+-                  <span><strong>蓝色颜料塔</strong>：范围减速效果</span>
+-                </li>
+-                <li className="flex items-start gap-2">
+-                  <span className="text-yellow-500">🟡</span>
+-                  <span><strong>黄色颜料塔</strong>：穿透攻击多个敌人</span>
+-                </li>
+-              </ul>
+-              <div className="mt-4 pt-3 border-t border-amber-200">
+-                <p className="text-amber-600 text-xs">💡 击败颜料怪获得颜料精华，用于建造更多防御塔！</p>
++
++            <div className="mb-6 p-5 bg-gradient-to-br from-amber-50 to-orange-50 rounded-2xl border-2 border-amber-200 text-left space-y-4">
++              <div>
++                <h3 className="font-bold text-amber-800 mb-3 text-lg flex items-center">📜 元素作战总览</h3>
++                <div className="grid md:grid-cols-3 gap-3 text-sm text-amber-700">
++                  <div className="p-3 rounded-xl bg-red-50">
++                    <div className="font-bold text-red-600 mb-1">🔴 灼烧</div>
++                    <div>造成持续伤害，并与冻结触发蒸汽爆发。</div>
++                  </div>
++                  <div className="p-3 rounded-xl bg-blue-50">
++                    <div className="font-bold text-blue-600 mb-1">🔵 冻结</div>
++                    <div>短时间阻断移动，并被火焰点燃成高压蒸汽。</div>
++                  </div>
++                  <div className="p-3 rounded-xl bg-yellow-50">
++                    <div className="font-bold text-yellow-600 mb-1">🟡 电击</div>
++                    <div>制造导电层数，死亡时可继续连锁跳跃。</div>
++                  </div>
++                </div>
++              </div>
++
++              <div className="grid md:grid-cols-2 gap-3 text-sm text-amber-700">
++                <div className="p-3 rounded-xl bg-purple-50 border border-purple-200">
++                  <div className="font-bold text-purple-700">融合塔</div>
++                  <div>红+蓝=紫腐蚀，红+黄=橙爆燃，蓝+黄=绿导流，三色相邻=白核塔。</div>
++                </div>
++                <div className="p-3 rounded-xl bg-slate-50 border border-slate-200">
++                  <div className="font-bold text-slate-700">状态连锁</div>
++                  <div>支持叠层、刷新、免疫与优先级结算，并在调试面板实时可见。</div>
++                </div>
+               </div>
+             </div>
+-            
++
+             <button
+               onClick={startGame}
+               className="px-10 py-4 bg-gradient-to-r from-amber-500 to-orange-500 text-white rounded-2xl text-2xl font-bold hover:from-amber-600 hover:to-orange-600 transition-all transform hover:scale-105 shadow-lg active:scale-95"
+@@ -506,70 +1273,52 @@ export default function CanvasDefender() {
+       )}
+ 
+       {(gameState === 'playing' || gameState === 'paused') && (
+-        <div className="flex flex-wrap gap-4 justify-center">
+-          <div className="bg-white rounded-2xl p-4 shadow-xl border-2 border-amber-300 w-56">
++        <div className="flex flex-wrap gap-4 justify-center items-start">
++          <div className="bg-white rounded-2xl p-4 shadow-xl border-2 border-amber-300 w-64">
+             <h3 className="font-bold text-amber-800 mb-3 text-center text-lg border-b-2 border-dashed border-amber-200 pb-2">
+               🎨 颜料精华
+             </h3>
+-            
++
+             <div className="space-y-3 mb-4">
+-              <div className="flex items-center gap-2 p-2 bg-red-50 rounded-lg">
+-                <div className="w-6 h-6 rounded-full bg-red-500 shadow-inner"></div>
+-                <div className="flex-1">
+-                  <div className="text-xs text-red-600 font-medium">红色</div>
+-                  <div className="h-2 bg-red-200 rounded-full overflow-hidden">
+-                    <div className="h-full bg-red-500 transition-all" style={{ width: `${Math.min(100, paint.red)}%` }}></div>
+-                  </div>
+-                </div>
+-                <span className="font-bold text-red-600 w-8 text-right">{paint.red}</span>
+-              </div>
+-              <div className="flex items-center gap-2 p-2 bg-blue-50 rounded-lg">
+-                <div className="w-6 h-6 rounded-full bg-blue-500 shadow-inner"></div>
+-                <div className="flex-1">
+-                  <div className="text-xs text-blue-600 font-medium">蓝色</div>
+-                  <div className="h-2 bg-blue-200 rounded-full overflow-hidden">
+-                    <div className="h-full bg-blue-500 transition-all" style={{ width: `${Math.min(100, paint.blue)}%` }}></div>
+-                  </div>
+-                </div>
+-                <span className="font-bold text-blue-600 w-8 text-right">{paint.blue}</span>
+-              </div>
+-              <div className="flex items-center gap-2 p-2 bg-yellow-50 rounded-lg">
+-                <div className="w-6 h-6 rounded-full bg-yellow-500 shadow-inner"></div>
+-                <div className="flex-1">
+-                  <div className="text-xs text-yellow-600 font-medium">黄色</div>
+-                  <div className="h-2 bg-yellow-200 rounded-full overflow-hidden">
+-                    <div className="h-full bg-yellow-500 transition-all" style={{ width: `${Math.min(100, paint.yellow)}%` }}></div>
++              {BASE_ELEMENTS.map(type => (
++                <div key={type} className={`flex items-center gap-2 p-2 rounded-lg ${type === 'red' ? 'bg-red-50' : type === 'blue' ? 'bg-blue-50' : 'bg-yellow-50'}`}>
++                  <div className="w-6 h-6 rounded-full shadow-inner" style={{ backgroundColor: ELEMENT_COLORS[type] }}></div>
++                  <div className="flex-1">
++                    <div className="text-xs font-medium" style={{ color: ELEMENT_COLORS[type] }}>
++                      {type === 'red' ? '红色' : type === 'blue' ? '蓝色' : '黄色'}
++                    </div>
++                    <div className="h-2 rounded-full overflow-hidden" style={{ backgroundColor: `${ELEMENT_COLORS[type]}33` }}>
++                      <div className="h-full transition-all" style={{ width: `${Math.min(100, paint[type])}%`, backgroundColor: ELEMENT_COLORS[type] }}></div>
++                    </div>
+                   </div>
++                  <span className="font-bold w-8 text-right" style={{ color: ELEMENT_COLORS[type] }}>{paint[type]}</span>
+                 </div>
+-                <span className="font-bold text-yellow-600 w-8 text-right">{paint.yellow}</span>
+-              </div>
++              ))}
+             </div>
+ 
+             <h3 className="font-bold text-amber-800 mb-2 text-center border-b-2 border-dashed border-amber-200 pb-2">
+               ✏️ 绘制防御塔
+             </h3>
+-            
++
+             <div className="space-y-2 mb-4">
+-              {(['red', 'blue', 'yellow'] as const).map(type => (
++              {BASE_ELEMENTS.map(type => (
+                 <button
+                   key={type}
+                   onClick={() => setSelectedTowerType(selectedTowerType === type ? null : type)}
+                   className={`w-full p-2 rounded-xl border-2 transition-all flex items-center gap-2 ${
+-                    selectedTowerType === type
+-                      ? 'border-gray-800 shadow-lg scale-105'
+-                      : 'border-gray-200 hover:border-gray-400'
++                    selectedTowerType === type ? 'border-gray-800 shadow-lg scale-105' : 'border-gray-200 hover:border-gray-400'
+                   }`}
+-                  style={{
+-                    background: `linear-gradient(135deg, ${getColorValue(type)}30, white)`,
+-                  }}
++                  style={{ background: `linear-gradient(135deg, ${ELEMENT_COLORS[type]}25, white)` }}
+                 >
+-                  <div className={`w-10 h-10 rounded-lg border-2 flex items-center justify-center text-xl ${getStyleClass(selectedStyle)}`}
+-                       style={{ backgroundColor: getColorValue(type) }}>
+-                    {selectedStyle === 'pencil' ? '✏️' : selectedStyle === 'watercolor' ? '💧' : '🖌️'}
++                  <div
++                    className={`w-10 h-10 rounded-lg border-2 flex items-center justify-center text-xl ${getStyleClass(selectedStyle)}`}
++                    style={{ backgroundColor: ELEMENT_COLORS[type] }}
++                  >
++                    {TOWER_STYLE_ICON[selectedStyle]}
+                   </div>
+                   <div className="text-left flex-1">
+-                    <div className="text-sm font-bold" style={{ color: getColorValue(type) }}>
+-                      {type === 'red' ? '烈焰塔' : type === 'blue' ? '寒冰塔' : '雷电塔'}
++                    <div className="text-sm font-bold" style={{ color: ELEMENT_COLORS[type] }}>
++                      {FUSION_PALETTE[type].label}
+                     </div>
+                     <div className="text-xs text-gray-500">消耗 {TOWER_COSTS[type][type]} 精华</div>
+                   </div>
+@@ -580,16 +1329,14 @@ export default function CanvasDefender() {
+             <h3 className="font-bold text-amber-800 mb-2 text-center border-b-2 border-dashed border-amber-200 pb-2">
+               🖌️ 笔触风格
+             </h3>
+-            
++
+             <div className="grid grid-cols-3 gap-1 mb-4">
+-              {(['pencil', 'watercolor', 'oil'] as const).map(style => (
++              {(['pencil', 'watercolor', 'oil'] as TowerStyle[]).map(style => (
+                 <button
+                   key={style}
+                   onClick={() => setSelectedStyle(style)}
+                   className={`p-2 rounded-lg text-xs font-medium transition-all ${
+-                    selectedStyle === style
+-                      ? 'bg-amber-400 text-amber-900 shadow-md'
+-                      : 'bg-amber-100 text-amber-700 hover:bg-amber-200'
++                    selectedStyle === style ? 'bg-amber-400 text-amber-900 shadow-md' : 'bg-amber-100 text-amber-700 hover:bg-amber-200'
+                   }`}
+                 >
+                   {style === 'pencil' ? '✏️铅笔' : style === 'watercolor' ? '💧水彩' : '🖌️油画'}
+@@ -597,13 +1344,14 @@ export default function CanvasDefender() {
+               ))}
+             </div>
+ 
+-            <div className="text-xs text-amber-600 bg-amber-50 p-2 rounded-lg text-center">
+-              💡 点击画布空白处放置防御塔
++            <div className="text-xs text-amber-600 bg-amber-50 p-2 rounded-lg text-center space-y-1">
++              <div>💡 相邻不同颜色自动触发融合塔</div>
++              <div>⚠️ 三色相邻将全部转化为白核塔</div>
+             </div>
+           </div>
+ 
+           <div className="flex flex-col items-center">
+-            <div className="flex items-center gap-6 mb-2 bg-white px-6 py-2 rounded-full shadow-lg border-2 border-amber-300">
++            <div className="flex flex-wrap items-center justify-center gap-4 mb-2 bg-white px-6 py-2 rounded-full shadow-lg border-2 border-amber-300">
+               <div className="text-amber-800 font-bold flex items-center gap-1">
+                 <span className="text-xl">🌊</span>
+                 <span>波次 {wave}/10</span>
+@@ -620,73 +1368,65 @@ export default function CanvasDefender() {
+                 <span className="text-xl">💀</span>
+                 <span>{enemiesKilled}</span>
+               </div>
++              <div className="text-purple-600 font-bold flex items-center gap-1">
++                <span className="text-xl">🔗</span>
++                <span>最高连锁 {highestChainCount}</span>
++              </div>
+             </div>
+ 
+-            <div className="relative bg-white rounded-xl shadow-2xl border-4 border-amber-400 overflow-hidden"
+-                 style={{ width: GRID_SIZE * CELL_SIZE, height: GRID_SIZE * CELL_SIZE,
+-                          backgroundImage: 'repeating-linear-gradient(0deg, transparent, transparent 49px, #f3e5d0 50px), repeating-linear-gradient(90deg, transparent, transparent 49px, #f3e5d0 50px)' }}>
+-              
++            <div
++              className="relative bg-white rounded-xl shadow-2xl border-4 border-amber-400 overflow-hidden"
++              style={{
++                width: GRID_SIZE * CELL_SIZE,
++                height: GRID_SIZE * CELL_SIZE,
++                backgroundImage:
++                  'repeating-linear-gradient(0deg, transparent, transparent 49px, #f3e5d0 50px), repeating-linear-gradient(90deg, transparent, transparent 49px, #f3e5d0 50px)',
++              }}
++            >
+               <svg className="absolute inset-0 pointer-events-none" style={{ width: GRID_SIZE * CELL_SIZE, height: GRID_SIZE * CELL_SIZE }}>
+-                {PATH_LINES.map((line, i) => (
+-                  <g key={i}>
+-                    <line
+-                      x1={line.x1}
+-                      y1={line.y1}
+-                      x2={line.x2}
+-                      y2={line.y2}
+-                      stroke="#8B4513"
+-                      strokeWidth="8"
+-                      strokeLinecap="round"
+-                      opacity="0.3"
+-                    />
+-                    <line
+-                      x1={line.x1}
+-                      y1={line.y1}
+-                      x2={line.x2}
+-                      y2={line.y2}
+-                      stroke="#D2691E"
+-                      strokeWidth="4"
+-                      strokeDasharray="12,8"
+-                      strokeLinecap="round"
+-                      opacity="0.7"
+-                    />
+-                    {(() => {
+-                      const angle = Math.atan2(line.y2 - line.y1, line.x2 - line.x1);
+-                      const midX = (line.x1 + line.x2) / 2;
+-                      const midY = (line.y1 + line.y2) / 2;
+-                      return (
+-                        <polygon
+-                          points={`${midX + Math.cos(angle) * 8},${midY + Math.sin(angle) * 8} ${midX + Math.cos(angle + 2.5) * 8},${midY + Math.sin(angle + 2.5) * 8} ${midX + Math.cos(angle - 2.5) * 8},${midY + Math.sin(angle - 2.5) * 8}`}
+-                          fill="#8B4513"
+-                          opacity="0.6"
+-                        />
+-                      );
+-                    })()}
+-                  </g>
+-                ))}
++                {PATH_LINES.map((line, index) => {
++                  const angle = Math.atan2(line.y2 - line.y1, line.x2 - line.x1);
++                  const midX = (line.x1 + line.x2) / 2;
++                  const midY = (line.y1 + line.y2) / 2;
++                  return (
++                    <g key={index}>
++                      <line x1={line.x1} y1={line.y1} x2={line.x2} y2={line.y2} stroke="#8B4513" strokeWidth="8" strokeLinecap="round" opacity="0.3" />
++                      <line x1={line.x1} y1={line.y1} x2={line.x2} y2={line.y2} stroke="#D2691E" strokeWidth="4" strokeDasharray="12,8" strokeLinecap="round" opacity="0.7" />
++                      <polygon
++                        points={`${midX + Math.cos(angle) * 8},${midY + Math.sin(angle) * 8} ${midX + Math.cos(angle + 2.5) * 8},${midY + Math.sin(angle + 2.5) * 8} ${midX + Math.cos(angle - 2.5) * 8},${midY + Math.sin(angle - 2.5) * 8}`}
++                        fill="#8B4513"
++                        opacity="0.6"
++                      />
++                    </g>
++                  );
++                })}
+               </svg>
+ 
+-              {PATH.map((pos, i) => (
+-                <div key={i}
+-                     className="absolute rounded-lg border-2 border-dashed border-amber-400"
+-                     style={{
+-                       left: pos.x * CELL_SIZE + 3,
+-                       top: pos.y * CELL_SIZE + 3,
+-                       width: CELL_SIZE - 6,
+-                       height: CELL_SIZE - 6,
+-                       background: 'linear-gradient(135deg, #fef3c7 0%, #fde68a 100%)',
+-                       opacity: 0.7,
+-                       boxShadow: 'inset 0 0 10px rgba(180, 83, 9, 0.1)',
+-                     }} />
++              {PATH_CELLS.map((pos, index) => (
++                <div
++                  key={`${pos.x}-${pos.y}-${index}`}
++                  className="absolute rounded-lg border-2 border-dashed border-amber-400"
++                  style={{
++                    left: pos.x * CELL_SIZE + 3,
++                    top: pos.y * CELL_SIZE + 3,
++                    width: CELL_SIZE - 6,
++                    height: CELL_SIZE - 6,
++                    background: 'linear-gradient(135deg, #fef3c7 0%, #fde68a 100%)',
++                    opacity: 0.55,
++                    boxShadow: 'inset 0 0 10px rgba(180, 83, 9, 0.1)',
++                  }}
++                />
+               ))}
+ 
+-              <div className="absolute flex items-center justify-center animate-pulse"
+-                   style={{
+-                     left: CORE_POSITION.x * CELL_SIZE,
+-                     top: CORE_POSITION.y * CELL_SIZE,
+-                     width: CELL_SIZE,
+-                     height: CELL_SIZE,
+-                   }}>
++              <div
++                className="absolute flex items-center justify-center animate-pulse"
++                style={{
++                  left: CORE_POSITION.x * CELL_SIZE,
++                  top: CORE_POSITION.y * CELL_SIZE,
++                  width: CELL_SIZE,
++                  height: CELL_SIZE,
++                }}
++              >
+                 <div className="relative">
+                   <div className="w-12 h-12 rounded-full bg-gradient-to-br from-yellow-300 via-pink-400 to-blue-400 shadow-lg flex items-center justify-center border-4 border-white">
+                     <span className="text-xl">💎</span>
+@@ -697,224 +1437,303 @@ export default function CanvasDefender() {
+                 </div>
+               </div>
+ 
+-              <div className="absolute flex items-center justify-center z-10"
+-                   style={{ left: -10, top: PATH[0].y * CELL_SIZE - 5, width: CELL_SIZE + 20, height: CELL_SIZE + 10 }}>
++              <div className="absolute flex items-center justify-center z-10" style={{ left: -10, top: PATH[0].y * CELL_SIZE - 5, width: CELL_SIZE + 20, height: CELL_SIZE + 10 }}>
+                 <div className="bg-gradient-to-r from-red-500 to-orange-500 text-white px-3 py-1 rounded-full text-xs font-bold shadow-lg flex items-center gap-1 animate-pulse">
+                   🚪 入口
+                 </div>
+               </div>
+ 
+-              <div className="absolute flex items-center justify-center z-10"
+-                   style={{ left: CORE_POSITION.x * CELL_SIZE - 10, top: CORE_POSITION.y * CELL_SIZE - 25, width: CELL_SIZE + 20 }}>
++              <div className="absolute flex items-center justify-center z-10" style={{ left: CORE_POSITION.x * CELL_SIZE - 10, top: CORE_POSITION.y * CELL_SIZE - 25, width: CELL_SIZE + 20 }}>
+                 <div className="bg-gradient-to-r from-purple-500 to-pink-500 text-white px-3 py-1 rounded-full text-xs font-bold shadow-lg flex items-center gap-1">
+                   💎 画布核心
+                 </div>
+               </div>
+ 
+-              {Array.from({ length: GRID_SIZE * GRID_SIZE }).map((_, i) => {
+-                const x = i % GRID_SIZE;
+-                const y = Math.floor(i / GRID_SIZE);
++              {Array.from({ length: GRID_SIZE * GRID_SIZE }).map((_, index) => {
++                const x = index % GRID_SIZE;
++                const y = Math.floor(index / GRID_SIZE);
+                 const canPlace = canPlaceTower(x, y);
+-                
+                 return (
+-                  <div key={i}
+-                       className={`absolute cursor-pointer transition-all ${
+-                         selectedTowerType && canPlace
+-                           ? 'hover:bg-green-300 hover:bg-opacity-40 hover:border-2 hover:border-green-500 hover:border-dashed'
+-                           : ''
+-                       }`}
+-                       style={{
+-                         left: x * CELL_SIZE,
+-                         top: y * CELL_SIZE,
+-                         width: CELL_SIZE,
+-                         height: CELL_SIZE,
+-                       }}
+-                       onClick={() => placeTower(x, y)}>
+-                  </div>
++                  <div
++                    key={index}
++                    className={`absolute cursor-pointer transition-all ${selectedTowerType && canPlace ? 'hover:bg-green-300 hover:bg-opacity-35 hover:border-2 hover:border-green-500 hover:border-dashed' : ''}`}
++                    style={{ left: x * CELL_SIZE, top: y * CELL_SIZE, width: CELL_SIZE, height: CELL_SIZE }}
++                    onClick={() => placeTower(x, y)}
++                  ></div>
+                 );
+               })}
+ 
+-              {towers.map(tower => (
+-                <div key={tower.id}
+-                     className="absolute flex flex-col items-center justify-center cursor-pointer group tower-brush"
+-                     style={{
+-                       left: tower.x * CELL_SIZE + 2,
+-                       top: tower.y * CELL_SIZE + 2,
+-                       width: CELL_SIZE - 4,
+-                       height: CELL_SIZE - 4,
+-                     }}
+-                     onClick={() => upgradeTower(tower.id)}>
+-                  <div className="absolute rounded-full border-2 border-dashed opacity-0 group-hover:opacity-30 transition-opacity pointer-events-none"
+-                       style={{
+-                         width: tower.range * CELL_SIZE * 2,
+-                         height: tower.range * CELL_SIZE * 2,
+-                         left: '50%',
+-                         top: '50%',
+-                         transform: 'translate(-50%, -50%)',
+-                         borderColor: getColorValue(tower.type),
+-                         backgroundColor: getColorValue(tower.type),
+-                       }} />
+-                  
+-                  <div className={`w-10 h-10 flex items-center justify-center transition-transform hover:scale-110 shadow-lg ${getStyleClass(tower.style)}`}
+-                       style={{ 
+-                         background: `linear-gradient(135deg, ${getColorValue(tower.type)}dd, ${getColorValue(tower.type)})`,
+-                         borderRadius: tower.style === 'oil' ? '30% 70% 70% 30% / 30% 30% 70% 70%' : 
+-                                      tower.style === 'watercolor' ? '50% 50% 50% 50%' : '8px',
+-                         boxShadow: `0 4px 12px ${getColorValue(tower.type)}60, inset 0 0 10px rgba(255,255,255,0.3)`,
+-                         border: tower.style === 'pencil' ? '2px dashed #333' : `3px solid ${getColorValue(tower.type)}`,
+-                       }}>
+-                    <span className="text-lg text-white font-bold drop-shadow-lg">
+-                      {tower.style === 'pencil' ? '✏️' : tower.style === 'watercolor' ? '💧' : '🖌️'}
+-                      {tower.level}
+-                    </span>
+-                  </div>
+-                  
+-                  <div className="absolute -bottom-7 left-1/2 -translate-x-1/2 bg-gradient-to-r from-gray-800 to-gray-700 text-white text-xs px-2 py-1 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap z-20 shadow-lg border border-gray-600">
+-                    {tower.level < 5 ? `⬆️ 升级: ${tower.level * 25}精华` : '⭐ 已满级'}
++              {towers.map(tower => {
++                const palette = FUSION_PALETTE[tower.fusionType];
++                const isFusion = tower.fusionType !== tower.type;
++                return (
++                  <div
++                    key={tower.id}
++                    className="absolute flex flex-col items-center justify-center cursor-pointer group"
++                    style={{ left: tower.x * CELL_SIZE + 2, top: tower.y * CELL_SIZE + 2, width: CELL_SIZE - 4, height: CELL_SIZE - 4 }}
++                    onClick={() => upgradeTower(tower.id)}
++                  >
++                    <div
++                      className="absolute rounded-full border-2 border-dashed opacity-0 group-hover:opacity-30 transition-opacity pointer-events-none"
++                      style={{
++                        width: tower.range * CELL_SIZE * 2,
++                        height: tower.range * CELL_SIZE * 2,
++                        left: '50%',
++                        top: '50%',
++                        transform: 'translate(-50%, -50%)',
++                        borderColor: palette.primary,
++                        backgroundColor: `${palette.primary}22`,
++                      }}
++                    />
++
++                    <div
++                      className={`w-11 h-11 flex items-center justify-center transition-transform hover:scale-110 shadow-lg ${getStyleClass(tower.style)}`}
++                      style={{
++                        background: `linear-gradient(135deg, ${palette.primary}, ${palette.secondary})`,
++                        borderRadius: tower.fusionType === 'white' ? '36% 64% 55% 45% / 45% 40% 60% 55%' : tower.style === 'oil' ? '30% 70% 70% 30% / 30% 30% 70% 70%' : tower.style === 'watercolor' ? '50%' : '8px',
++                        boxShadow: isFusion
++                          ? `0 0 18px ${palette.primary}90, 0 0 28px ${palette.secondary}60, inset 0 0 12px rgba(255,255,255,0.45)`
++                          : `0 4px 12px ${palette.primary}60, inset 0 0 10px rgba(255,255,255,0.3)`,
++                        border: tower.style === 'pencil' ? `2px dashed ${palette.accent}` : `3px solid ${palette.accent}`,
++                      }}
++                    >
++                      <span className="text-lg text-white font-bold drop-shadow-lg">
++                        {tower.fusionType === 'white' ? '✴️' : tower.fusionType === 'purple' ? '🧪' : tower.fusionType === 'orange' ? '💥' : tower.fusionType === 'green' ? '🌿' : TOWER_STYLE_ICON[tower.style]}
++                        {tower.level}
++                      </span>
++                    </div>
++
++                    <div className="absolute -top-6 left-1/2 -translate-x-1/2 px-2 py-0.5 rounded-full text-[10px] font-bold text-white shadow" style={{ backgroundColor: palette.accent }}>
++                      {FUSION_PALETTE[tower.fusionType].label}
++                    </div>
++
++                    <div className="absolute -bottom-7 left-1/2 -translate-x-1/2 bg-gradient-to-r from-gray-800 to-gray-700 text-white text-xs px-2 py-1 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap z-20 shadow-lg border border-gray-600">
++                      {tower.level < 5 ? `⬆️ 升级: ${tower.level * 25}精华` : '⭐ 已满级'}
++                    </div>
+                   </div>
+-                </div>
+-              ))}
++                );
++              })}
+ 
+               {enemies.map(enemy => (
+-                <div key={enemy.id}
+-                     className="absolute flex flex-col items-center"
+-                     style={{
+-                       left: enemy.x - 18,
+-                       top: enemy.y - 24,
+-                       transition: 'none',
+-                     }}>
+-                  <div className="w-9 h-1.5 bg-gray-200 rounded-full overflow-hidden mb-1 border border-gray-300">
+-                    <div className="h-full transition-all"
+-                         style={{
+-                           width: `${(enemy.health / enemy.maxHealth) * 100}%`,
+-                           background: `linear-gradient(90deg, ${enemy.color}, ${enemy.color}aa)`,
+-                         }} />
++                <div key={enemy.id} className="absolute flex flex-col items-center" style={{ left: enemy.x - 18, top: enemy.y - 28, transition: 'none' }}>
++                  <div className="flex items-center gap-1 mb-1">
++                    <div className="w-9 h-1.5 bg-gray-200 rounded-full overflow-hidden border border-gray-300">
++                      <div
++                        className="h-full transition-all"
++                        style={{ width: `${(enemy.health / enemy.maxHealth) * 100}%`, background: `linear-gradient(90deg, ${enemy.color}, ${enemy.color}aa)` }}
++                      />
++                    </div>
++                    <div className="flex gap-0.5 min-h-[12px]">
++                      {sortStatuses(enemy.statuses).map(status => (
++                        <span key={`${enemy.id}-${status.type}`} className="text-[10px] leading-none" title={`${STATUS_META[status.type].label} x${status.stacks}`}>
++                          {STATUS_META[status.type].icon}
++                        </span>
++                      ))}
++                    </div>
+                   </div>
+-                  
+-                  <div className="w-9 h-9 rounded-full flex items-center justify-center"
+-                       style={{
+-                         background: `radial-gradient(circle at 30% 30%, ${enemy.color}cc, ${enemy.color})`,
+-                         boxShadow: `0 0 12px ${enemy.color}80, inset -2px -2px 6px rgba(0,0,0,0.3), inset 2px 2px 6px rgba(255,255,255,0.3)`,
+-                         border: '2px dashed rgba(0,0,0,0.2)',
+-                         animation: 'wobble 0.6s ease-in-out infinite',
+-                       }}>
++
++                  <div
++                    className="w-9 h-9 rounded-full flex items-center justify-center relative"
++                    style={{
++                      background: `radial-gradient(circle at 30% 30%, ${enemy.color}cc, ${enemy.color})`,
++                      boxShadow: `0 0 12px ${enemy.color}80, inset -2px -2px 6px rgba(0,0,0,0.3), inset 2px 2px 6px rgba(255,255,255,0.3)`,
++                      border: '2px dashed rgba(0,0,0,0.2)',
++                    }}
++                  >
+                     <span className="text-base drop-shadow">🎨</span>
++                    {enemy.colorType === 'mixed' && <span className="absolute -bottom-1 text-[10px]">🜁</span>}
+                   </div>
+                 </div>
+               ))}
+ 
+-              {projectiles.map(proj => (
+-                <div key={proj.id}
+-                     className="absolute rounded-full"
+-                     style={{
+-                       left: proj.x - 6,
+-                       top: proj.y - 6,
+-                       width: proj.type === 'pierce' ? 14 : 12,
+-                       height: proj.type === 'pierce' ? 14 : 12,
+-                       background: `radial-gradient(circle, white, ${proj.color})`,
+-                       boxShadow: `0 0 12px ${proj.color}, 0 0 20px ${proj.color}50`,
+-                       border: proj.type === 'slow' ? '2px dashed white' : 'none',
+-                     }} />
++              {projectiles.map(projectile => (
++                <div
++                  key={projectile.id}
++                  className="absolute rounded-full"
++                  style={{
++                    left: projectile.x - 6,
++                    top: projectile.y - 6,
++                    width: projectile.kind === 'prismatic' ? 16 : projectile.kind === 'chain' ? 14 : 12,
++                    height: projectile.kind === 'prismatic' ? 16 : projectile.kind === 'chain' ? 14 : 12,
++                    background: `radial-gradient(circle, white, ${projectile.color})`,
++                    boxShadow: `0 0 12px ${projectile.color}, 0 0 20px ${projectile.color}60`,
++                    border: projectile.kind === 'freeze' ? '2px dashed white' : projectile.kind === 'prismatic' ? '2px solid rgba(255,255,255,0.8)' : 'none',
++                  }}
++                />
+               ))}
+ 
+-              {particles.map(p => (
+-                <div key={p.id}
+-                     className="absolute rounded-full pointer-events-none"
+-                     style={{
+-                       left: p.x - p.size / 2,
+-                       top: p.y - p.size / 2,
+-                       width: p.size,
+-                       height: p.size,
+-                       background: `radial-gradient(circle, ${p.color}, ${p.color}80)`,
+-                       opacity: p.life / 50,
+-                       filter: 'blur(0.5px)',
+-                     }} />
++              {particles.map(particle => (
++                <div
++                  key={particle.id}
++                  className="absolute rounded-full pointer-events-none"
++                  style={{
++                    left: particle.x - particle.size / 2,
++                    top: particle.y - particle.size / 2,
++                    width: particle.size,
++                    height: particle.size,
++                    background: particle.kind === 'ring' ? 'transparent' : `radial-gradient(circle, ${particle.color}, ${particle.color}66)`,
++                    border: particle.kind === 'ring' ? `2px solid ${particle.color}` : 'none',
++                    opacity: particle.life / 40,
++                    filter: 'blur(0.4px)',
++                  }}
++                />
+               ))}
++
++              <svg className="absolute inset-0 pointer-events-none" style={{ width: GRID_SIZE * CELL_SIZE, height: GRID_SIZE * CELL_SIZE }}>
++                {chainEffects.map(effect => (
++                  <g key={effect.id} opacity={effect.life / 14}>
++                    <line x1={effect.x1} y1={effect.y1} x2={effect.x2} y2={effect.y2} stroke={effect.color} strokeWidth="3" strokeDasharray="6,4" />
++                    <text x={(effect.x1 + effect.x2) / 2} y={(effect.y1 + effect.y2) / 2 - 6} textAnchor="middle" fill={effect.color} fontSize="10" fontWeight="700">
++                      {effect.label}
++                    </text>
++                  </g>
++                ))}
++              </svg>
+             </div>
+ 
+-            <div className="flex gap-3 mt-3">
++            <div className="flex gap-3 mt-3 flex-wrap justify-center">
+               {!waveInProgress ? (
+-                <button onClick={startWave}
+-                        className="px-6 py-3 bg-gradient-to-r from-green-500 to-emerald-500 text-white rounded-full font-bold hover:from-green-600 hover:to-emerald-600 transition-all transform hover:scale-105 shadow-lg">
+-                  🚀 开始第 {wave} 波 {wave > 1 && `(+10全部精华)`}
++                <button
++                  onClick={startWave}
++                  className="px-6 py-3 bg-gradient-to-r from-green-500 to-emerald-500 text-white rounded-full font-bold hover:from-green-600 hover:to-emerald-600 transition-all transform hover:scale-105 shadow-lg"
++                >
++                  🚀 开始第 {wave} 波 {wave > 1 && '(+10全部精华)'}
+                 </button>
+               ) : (
+                 <div className="px-6 py-3 bg-orange-500 text-white rounded-full font-bold shadow-lg animate-pulse">
+                   ⚔️ 战斗中... ({enemies.length}只颜料怪)
+                 </div>
+               )}
+-              
++
+               {!waveInProgress && wave < 10 && enemies.length === 0 && (
+-                <button onClick={() => setWave(w => w + 1)}
+-                        className="px-4 py-3 bg-blue-500 text-white rounded-full font-bold hover:bg-blue-600 transition-all shadow-lg">
+-                  ⏩ 跳过
++                <button
++                  onClick={() => syncWave(nextWavePreview)}
++                  className="px-4 py-3 bg-blue-500 text-white rounded-full font-bold hover:bg-blue-600 transition-all shadow-lg"
++                >
++                  ⏩ 跳到第 {nextWavePreview} 波
+                 </button>
+               )}
+-              
+-              <button onClick={() => setGameState(gameState === 'paused' ? 'playing' : 'paused')}
+-                      className="px-4 py-3 bg-amber-500 text-white rounded-full font-bold hover:bg-amber-600 transition-all shadow-lg">
++
++              <button
++                onClick={togglePause}
++                className="px-4 py-3 bg-amber-500 text-white rounded-full font-bold hover:bg-amber-600 transition-all shadow-lg"
++              >
+                 {gameState === 'paused' ? '▶️ 继续' : '⏸️ 暂停'}
+               </button>
+             </div>
+           </div>
+ 
+-          <div className="bg-white rounded-2xl p-4 shadow-xl border-2 border-amber-300 w-52">
+-            <h3 className="font-bold text-amber-800 mb-3 text-center text-lg border-b-2 border-dashed border-amber-200 pb-2">
+-              📖 图鉴收集
+-            </h3>
+-            
+-            <div className="grid grid-cols-3 gap-2 mb-4">
+-              {(['red', 'blue', 'yellow'] as const).map(type => 
+-                (['pencil', 'watercolor', 'oil'] as const).map(style => {
+-                  const key = `${type}-${style}`;
+-                  const collected = collectedTowers.has(key);
+-                  return (
+-                    <div key={key}
+-                         className={`aspect-square rounded-lg border-2 flex flex-col items-center justify-center transition-all ${
+-                           collected ? `${getStyleClass(style)} shadow-md` : 'bg-gray-100 border-gray-200'
+-                         }`}
+-                         style={{ backgroundColor: collected ? getColorValue(type) : '#f3f4f6' }}
+-                         title={collected ? `${type}-${style}` : '未收集'}>
+-                      <span className="text-lg">
+-                        {collected ? (
+-                          style === 'pencil' ? '✏️' : style === 'watercolor' ? '💧' : '🖌️'
+-                        ) : '❓'}
+-                      </span>
+-                    </div>
+-                  );
+-                })
+-              )}
+-            </div>
+-            
+-            <div className="text-center text-sm text-amber-600 bg-amber-50 py-2 rounded-lg mb-4">
+-              已收集: {collectedTowers.size} / 9
++          <div className="bg-white rounded-2xl p-4 shadow-xl border-2 border-amber-300 w-80 space-y-4">
++            <div>
++              <h3 className="font-bold text-amber-800 mb-3 text-center text-lg border-b-2 border-dashed border-amber-200 pb-2">
++                📖 图鉴收集
++              </h3>
++              <div className="grid grid-cols-3 gap-2 mb-4">
++                {BASE_ELEMENTS.map(type =>
++                  (['pencil', 'watercolor', 'oil'] as TowerStyle[]).map(style => {
++                    const key = `${type}-${style}`;
++                    const collected = collectedTowers.has(key);
++                    return (
++                      <div
++                        key={key}
++                        className={`aspect-square rounded-lg border-2 flex flex-col items-center justify-center transition-all ${
++                          collected ? `${getStyleClass(style)} shadow-md` : 'bg-gray-100 border-gray-200'
++                        }`}
++                        style={{ backgroundColor: collected ? ELEMENT_COLORS[type] : '#f3f4f6' }}
++                        title={collected ? `${type}-${style}` : '未收集'}
++                      >
++                        <span className="text-lg">{collected ? TOWER_STYLE_ICON[style] : '❓'}</span>
++                      </div>
++                    );
++                  }),
++                )}
++              </div>
++              <div className="text-center text-sm text-amber-600 bg-amber-50 py-2 rounded-lg">
++                已收集: {collectedTowers.size} / 9
++              </div>
+             </div>
+ 
+-            <h4 className="font-bold text-amber-800 mb-2 text-sm border-b border-dashed border-amber-200 pb-1">
+-              📊 战斗统计
+-            </h4>
+-            
+-            <div className="space-y-2 text-sm">
+-              <div className="flex justify-between items-center p-1.5 bg-red-50 rounded-lg">
+-                <span className="text-gray-600">消灭敌人</span>
+-                <span className="font-bold text-red-600">{enemiesKilled}</span>
++            <div>
++              <h4 className="font-bold text-amber-800 mb-2 text-sm border-b border-dashed border-amber-200 pb-1">
++                📊 战斗调试面板
++              </h4>
++              <div className="grid grid-cols-2 gap-2 text-sm mb-3">
++                <div className="flex justify-between items-center p-2 bg-red-50 rounded-lg">
++                  <span className="text-gray-600">消灭敌人</span>
++                  <span className="font-bold text-red-600">{enemiesKilled}</span>
++                </div>
++                <div className="flex justify-between items-center p-2 bg-amber-50 rounded-lg">
++                  <span className="text-gray-600">获得分数</span>
++                  <span className="font-bold text-amber-600">{score}</span>
++                </div>
++                <div className="flex justify-between items-center p-2 bg-blue-50 rounded-lg">
++                  <span className="text-gray-600">防御塔数</span>
++                  <span className="font-bold text-blue-600">{towers.length}</span>
++                </div>
++                <div className="flex justify-between items-center p-2 bg-purple-50 rounded-lg">
++                  <span className="text-gray-600">最高连锁</span>
++                  <span className="font-bold text-purple-600">{highestChainCount}</span>
++                </div>
+               </div>
+-              <div className="flex justify-between items-center p-1.5 bg-amber-50 rounded-lg">
+-                <span className="text-gray-600">获得分数</span>
+-                <span className="font-bold text-amber-600">{score}</span>
++            </div>
++
++            <div>
++              <h4 className="font-bold text-amber-800 mb-2 text-sm">🧪 敌人异常状态</h4>
++              <div className="space-y-2 max-h-48 overflow-auto pr-1">
++                {debugEnemies.length === 0 ? (
++                  <div className="text-xs text-gray-500 bg-gray-50 rounded-lg p-3 text-center">暂无敌人</div>
++                ) : (
++                  debugEnemies.map(enemy => (
++                    <div key={enemy.id} className="p-2 rounded-lg bg-slate-50 border border-slate-200 text-xs space-y-1">
++                      <div className="flex justify-between items-center">
++                        <span className="font-bold" style={{ color: enemy.color }}>敌人 #{enemy.id}</span>
++                        <span className="text-slate-500">{enemy.traitsLabel}</span>
++                      </div>
++                      <div className="text-slate-600">状态：{getEnemyStatusSummary(enemy)}</div>
++                      <div className="text-slate-600">
++                        抗性：R {Math.round(enemy.resistances.red * 100)}% / B {Math.round(enemy.resistances.blue * 100)}% / Y {Math.round(enemy.resistances.yellow * 100)}%
++                      </div>
++                      <div className="text-slate-600">弱点：{enemy.weaknesses.join('、')} | 免疫：{enemy.immunities.length > 0 ? enemy.immunities.join('、') : '无'}</div>
++                    </div>
++                  ))
++                )}
+               </div>
+-              <div className="flex justify-between items-center p-1.5 bg-blue-50 rounded-lg">
+-                <span className="text-gray-600">防御塔数</span>
+-                <span className="font-bold text-blue-600">{towers.length}</span>
++            </div>
++
++            <div>
++              <h4 className="font-bold text-amber-800 mb-2 text-sm">⚗️ 最近元素反应</h4>
++              <div className="space-y-2 max-h-44 overflow-auto pr-1">
++                {combatLogs.length === 0 ? (
++                  <div className="text-xs text-gray-500 bg-gray-50 rounded-lg p-3 text-center">等待战斗开始</div>
++                ) : (
++                  combatLogs.map(log => (
++                    <div key={log.id} className="text-xs rounded-lg px-3 py-2 border bg-white" style={{ color: log.color, borderColor: `${log.color}55` }}>
++                      {log.text}
++                    </div>
++                  ))
++                )}
+               </div>
+             </div>
+ 
+-            <div className="mt-4 pt-2 border-t border-amber-200">
+-              <h4 className="font-bold text-amber-800 mb-2 text-sm">🎯 笔触效果</h4>
+-              <div className="text-xs text-gray-600 space-y-1">
+-                <p>✏️ <strong>铅笔</strong>: 攻速快</p>
+-                <p>💧 <strong>水彩</strong>: 平衡型</p>
+-                <p>🖌️ <strong>油画</strong>: 高伤害</p>
++            <div>
++              <h4 className="font-bold text-amber-800 mb-2 text-sm">🏹 防御塔伤害贡献</h4>
++              <div className="space-y-2 max-h-40 overflow-auto pr-1">
++                {topDamageTowers.length === 0 ? (
++                  <div className="text-xs text-gray-500 bg-gray-50 rounded-lg p-3 text-center">尚未造成伤害</div>
++                ) : (
++                  topDamageTowers.map(tower => {
++                    const palette = FUSION_PALETTE[tower.fusionType];
++                    return (
++                      <div key={tower.id} className="flex items-center justify-between text-xs p-2 rounded-lg" style={{ backgroundColor: `${palette.primary}14` }}>
++                        <div>
++                          <div className="font-bold" style={{ color: palette.accent }}>{FUSION_PALETTE[tower.fusionType].label} #{tower.id}</div>
++                          <div className="text-slate-500">Lv.{tower.level} · {tower.style}</div>
++                        </div>
++                        <div className="font-bold" style={{ color: palette.primary }}>{Math.round(tower.damageContribution)}</div>
++                      </div>
++                    );
++                  })
++                )}
+               </div>
+             </div>
+           </div>
+@@ -928,7 +1747,7 @@ export default function CanvasDefender() {
+               💔 画布被污染了...
+             </h2>
+             <p className="text-red-400 mb-6">颜料怪占领了你的画布核心</p>
+-            
++
+             <div className="bg-red-50 rounded-2xl p-4 mb-6 text-left space-y-2">
+               <div className="flex justify-between text-red-800">
+                 <span>🌊 坚持波次</span>
+@@ -943,13 +1762,15 @@ export default function CanvasDefender() {
+                 <span className="font-bold">{score}</span>
+               </div>
+               <div className="flex justify-between text-red-800">
+-                <span>📖 收集图鉴</span>
+-                <span className="font-bold">{collectedTowers.size}/9</span>
++                <span>🔗 最高连锁</span>
++                <span className="font-bold">{highestChainCount}</span>
+               </div>
+             </div>
+-            
+-            <button onClick={startGame}
+-                    className="px-8 py-4 bg-gradient-to-r from-amber-500 to-orange-500 text-white rounded-2xl text-xl font-bold hover:from-amber-600 hover:to-orange-600 transition-all transform hover:scale-105 shadow-lg">
++
++            <button
++              onClick={startGame}
++              className="px-8 py-4 bg-gradient-to-r from-amber-500 to-orange-500 text-white rounded-2xl text-xl font-bold hover:from-amber-600 hover:to-orange-600 transition-all transform hover:scale-105 shadow-lg"
++            >
+               🎨 重新开始
+             </button>
+           </div>
+@@ -963,7 +1784,7 @@ export default function CanvasDefender() {
+               🎉 画布已守护成功！
+             </h2>
+             <p className="text-green-400 mb-6">你成功击退了所有颜料怪的入侵！</p>
+-            
++
+             <div className="bg-gradient-to-br from-green-50 to-emerald-50 rounded-2xl p-4 mb-6 text-left space-y-2">
+               <div className="flex justify-between text-green-800">
+                 <span>🏆 完成波次</span>
+@@ -978,26 +1799,26 @@ export default function CanvasDefender() {
+                 <span className="font-bold">{score}</span>
+               </div>
+               <div className="flex justify-between text-green-800">
+-                <span>📖 收集图鉴</span>
+-                <span className="font-bold">{collectedTowers.size}/9</span>
++                <span>🔗 最高连锁</span>
++                <span className="font-bold">{highestChainCount}</span>
+               </div>
+               <div className="flex justify-between text-green-800">
+                 <span>❤️ 剩余生命</span>
+                 <span className="font-bold">{coreHealth}</span>
+               </div>
+             </div>
+-            
+-            <button onClick={startGame}
+-                    className="px-8 py-4 bg-gradient-to-r from-green-500 to-emerald-500 text-white rounded-2xl text-xl font-bold hover:from-green-600 hover:to-emerald-600 transition-all transform hover:scale-105 shadow-lg">
++
++            <button
++              onClick={startGame}
++              className="px-8 py-4 bg-gradient-to-r from-green-500 to-emerald-500 text-white rounded-2xl text-xl font-bold hover:from-green-600 hover:to-emerald-600 transition-all transform hover:scale-105 shadow-lg"
++            >
+               🎨 再来一局
+             </button>
+           </div>
+         </div>
+       )}
+ 
+-      <div className="mt-4 text-amber-600 text-sm opacity-70">
+-        🎨 绘世守护者 - 用画笔守护你的世界
+-      </div>
++      <div className="mt-4 text-amber-600 text-sm opacity-70">🎨 绘世守护者 - 用画笔守护你的世界</div>
+     </div>
+   );
+-}
+\ No newline at end of file
++}
