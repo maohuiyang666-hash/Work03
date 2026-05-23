@@ -37,5 +37,14 @@ export default defineConfig(({ command }) => {
       __BUILD_TIME__: JSON.stringify(new Date().toISOString()),
       __GIT_COMMIT__: JSON.stringify(process.env.GITHUB_SHA || 'dev'),
     },
+    test: {
+      globals: true,
+      environment: 'jsdom',
+      setupFiles: './src/test/setup.ts',
+      coverage: {
+        provider: 'v8',
+        reporter: ['text', 'json', 'html'],
+      },
+    },
   }
 })
