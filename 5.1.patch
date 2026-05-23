@@ -1,0 +1,80 @@
+diff --git a/repo/package.json b/repo/package.json
+index 4cd2d7f..0e469d4 100644
+--- a/repo/package.json
++++ b/repo/package.json
+@@ -6,7 +6,8 @@
+     "dev": "vite",
+     "build": "tsc && vite build",
+     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
+-    "preview": "vite preview"
++    "preview": "vite preview",
++    "check-build": "node scripts/check-build.mjs"
+   },
+   "dependencies": {
+     "@aidp/web-code-check": "^1.1.10",
+diff --git a/repo/src/main.tsx b/repo/src/main.tsx
+index cbe1cdf..ebc7a14 100644
+--- a/repo/src/main.tsx
++++ b/repo/src/main.tsx
+@@ -2,9 +2,23 @@ import React from 'react'
+ import ReactDOM from 'react-dom/client'
+ import App from './App.tsx'
+ import './index.css'
++import { ErrorBoundary } from './components/ErrorBoundary'
++
++const BUILD_INFO = {
++  version: '0.1.0',
++  buildTime: new Date().toISOString(),
++  environment: import.meta.env.MODE,
++  commitHash: import.meta.env.VITE_COMMIT_HASH || 'unknown'
++};
++
++if (import.meta.env.DEV) {
++  console.log('🎮 Build Info:', BUILD_INFO);
++}
+ 
+ ReactDOM.createRoot(document.getElementById('root')!).render(
+   <React.StrictMode>
+-    <App />
++    <ErrorBoundary>
++      <App />
++    </ErrorBoundary>
+   </React.StrictMode>,
+ )
+\ No newline at end of file
+diff --git a/repo/vite.config.ts b/repo/vite.config.ts
+index 3cfcb7e..d95dd12 100644
+--- a/repo/vite.config.ts
++++ b/repo/vite.config.ts
+@@ -4,12 +4,26 @@ import react from '@vitejs/plugin-react'
+ export default defineConfig({
+   plugins: [react()],
+   server: {
+-    port: 62248,   // 随机端口（由脚本生成）
+-    strictPort: false,     // 若被占用，Vite 会继续找下一个可用端口
++    port: 62248,
++    strictPort: false,
+     open: false
+   },
+   preview: {
+-    port: 62248,            // 预览端口保持默认，可按需改为随机
++    port: 62248,
+     strictPort: false
+-  }
++  },
++  build: {
++    outDir: 'dist',
++    sourcemap: false,
++    target: 'es2015',
++    chunkSizeWarningLimit: 1000,
++    rollupOptions: {
++      output: {
++        manualChunks: {
++          vendor: ['react', 'react-dom']
++        }
++      }
++    }
++  },
++  base: '/work02/'
+ })
+\ No newline at end of file

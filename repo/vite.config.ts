@@ -4,12 +4,26 @@ import react from '@vitejs/plugin-react'
 export default defineConfig({
   plugins: [react()],
   server: {
-    port: 62248,   // 随机端口（由脚本生成）
-    strictPort: false,     // 若被占用，Vite 会继续找下一个可用端口
+    port: 62248,
+    strictPort: false,
     open: false
   },
   preview: {
-    port: 62248,            // 预览端口保持默认，可按需改为随机
+    port: 62248,
     strictPort: false
-  }
+  },
+  build: {
+    outDir: 'dist',
+    sourcemap: false,
+    target: 'es2015',
+    chunkSizeWarningLimit: 1000,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          vendor: ['react', 'react-dom']
+        }
+      }
+    }
+  },
+  base: '/work02/'
 })
