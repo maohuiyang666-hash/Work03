@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import BuildDiagnostics from './components/BuildDiagnostics';
 
 // 类型定义
 interface Position {
@@ -98,8 +99,21 @@ const TOWER_COSTS: Record<string, PaintEssence> = {
   yellow: { red: 0, blue: 0, yellow: 30 },
 };
 
+const RECOVERY_ACTION_KEY = 'canvas-defender-recovery-action';
+
+const getInitialGameState = (): 'menu' | 'playing' => {
+  if (typeof window === 'undefined') {
+    return 'menu';
+  }
+
+  const recoveryAction = window.sessionStorage.getItem(RECOVERY_ACTION_KEY);
+  window.sessionStorage.removeItem(RECOVERY_ACTION_KEY);
+
+  return recoveryAction === 'restart' ? 'playing' : 'menu';
+};
+
 export default function CanvasDefender() {
-  const [gameState, setGameState] = useState<'menu' | 'playing' | 'paused' | 'gameOver' | 'victory'>('menu');
+  const [gameState, setGameState] = useState<'menu' | 'playing' | 'paused' | 'gameOver' | 'victory'>(getInitialGameState);
   const [wave, setWave] = useState(1);
   const [coreHealth, setCoreHealth] = useState(100);
   const [paint, setPaint] = useState<PaintEssence>({ red: 50, blue: 50, yellow: 50 });
@@ -998,6 +1012,7 @@ export default function CanvasDefender() {
       <div className="mt-4 text-amber-600 text-sm opacity-70">
         🎨 绘世守护者 - 用画笔守护你的世界
       </div>
+      <BuildDiagnostics />
     </div>
   );
 }

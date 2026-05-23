@@ -1,12 +1,14 @@
 {
   "name": "workspace",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
-    "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
-    "preview": "vite preview"
+    "typecheck": "tsc --noEmit",
+    "build": "npm run typecheck && vite build",
+    "check:build": "node scripts/check-build.mjs",
+    "ci:quality": "npm run build && npm run check:build",
+    "preview": "vite preview --host 0.0.0.0"
   },
   "dependencies": {
     "@aidp/web-code-check": "^1.1.10",
@@ -15,6 +17,7 @@
     "react-dom": "18.2.0"
   },
   "devDependencies": {
+    "@types/node": "^20.19.37",
     "@types/react": "^18.2.15",
     "@types/react-dom": "^18.2.7",
     "@vitejs/plugin-react": "^4.0.3",
