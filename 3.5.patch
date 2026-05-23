@@ -1,0 +1,475 @@
+diff --git a/repo/src/App.tsx b/repo/src/App.tsx
+index 61fc2a0..314b663 100644
+--- a/repo/src/App.tsx
++++ b/repo/src/App.tsx
+@@ -76,6 +76,8 @@ interface PaintEssence {
+   yellow: number;
+ }
+ 
++type PaintColor = 'red' | 'blue' | 'yellow';
++
+ const GRID_SIZE = 10;
+ const CELL_SIZE = 50;
+ 
+@@ -123,6 +125,10 @@ function seededRandom(seed: number): () => number {
+   };
+ }
+ 
++function addPaint(paint: PaintEssence, color: PaintColor, amount: number): PaintEssence {
++  return { ...paint, [color]: paint[color] + amount };
++}
++
+ export default function CanvasDefender() {
+   const [gameState, setGameState] = useState<GameState>('menu');
+   const [wave, setWave] = useState(1);
+@@ -201,9 +207,11 @@ export default function CanvasDefender() {
+     paintReductionMult: 0,
+     paintReductionColor: null,
+   });
++  const enemiesReachedCoreRef = useRef(false);
++  const difficultyHistoryRef = useRef<{ wave: number; enemyCount: number; enemyHealth: number; enemySpeed: number }[]>([]);
+ 
+   const getColorValue = (type: 'red' | 'blue' | 'yellow'): string => {
+-    const colors = {
++    const colors: Record<PaintColor, string> = {
+       red: '#e74c3c',
+       blue: '#3498db',
+       yellow: '#f39c12',
+@@ -223,16 +231,16 @@ export default function CanvasDefender() {
+   const canPlaceTower = (x: number, y: number): boolean => {
+     const key = `${x},${y}`;
+     if (eventBlockedCellsRef.current.has(key)) return false;
+-    const isOnPath = PATH.some(p => Math.abs(p.x - x) < 0.5 && Math.abs(p.y - y) < 0.5);
++    const isOnPath = PATH.some((p: Position) => Math.abs(p.x - x) < 0.5 && Math.abs(p.y - y) < 0.5);
+     if (isOnPath && !(x === CORE_POSITION.x && y === CORE_POSITION.y)) return false;
+-    const hasTower = towers.some(t => t.x === x && t.y === y);
++    const hasTower = towers.some((t: Tower) => t.x === x && t.y === y);
+     if (hasTower) return false;
+     if (x < 0 || x >= GRID_SIZE || y < 0 || y >= GRID_SIZE) return false;
+     return true;
+   };
+ 
+   const addReplayAction = useCallback((type: import('./types/replay').ReplayActionType, payload: unknown) => {
+-    setReplay(prev => {
++    setReplay((prev: ReplayData | null) => {
+       if (!prev) return prev;
+       return recordAction(prev, {
+         time: gameTimeRef.current,
+@@ -267,8 +275,8 @@ export default function CanvasDefender() {
+       style: selectedStyle,
+     };
+ 
+-    setTowers(prev => [...prev, newTower]);
+-    setPaint(prev => ({
++    setTowers((prev: Tower[]) => [...prev, newTower]);
++    setPaint((prev: PaintEssence) => ({
+       red: prev.red - cost.red,
+       blue: prev.blue - cost.blue,
+       yellow: prev.yellow - cost.yellow,
+@@ -276,7 +284,7 @@ export default function CanvasDefender() {
+ 
+     const towerKey = `${selectedTowerType}-${selectedStyle}`;
+     if (!collectedTowers.has(towerKey)) {
+-      setCollectedTowers(prev => new Set(prev).add(towerKey));
++      setCollectedTowers((prev: Set<string>) => new Set(prev).add(towerKey));
+     }
+ 
+     addReplayAction('PLACE_TOWER', { x, y, type: selectedTowerType, style: selectedStyle });
+@@ -315,7 +323,7 @@ export default function CanvasDefender() {
+       isElite,
+     };
+ 
+-    setEnemies(prev => [...prev, newEnemy]);
++    setEnemies((prev: Enemy[]) => [...prev, newEnemy]);
+   }, [wave, difficultyDirector]);
+ 
+   const startWave = () => {
+@@ -323,6 +331,7 @@ export default function CanvasDefender() {
+     setWaveInProgress(true);
+     enemiesSpawnedRef.current = 0;
+     spawnTimerRef.current = 0;
++    enemiesReachedCoreRef.current = false;
+     setWaveStartTime(Date.now());
+     addReplayAction('START_WAVE', { wave });
+   };
+@@ -341,7 +350,7 @@ export default function CanvasDefender() {
+         velocityY: (Math.random() - 0.5) * 4,
+       });
+     }
+-    setParticles(prev => [...prev, ...newParticles]);
++    setParticles((prev: Particle[]) => [...prev, ...newParticles]);
+   };
+ 
+   const gameLoop = useCallback(() => {
+@@ -374,7 +383,7 @@ export default function CanvasDefender() {
+           setGameState('victory');
+         } else {
+           const bonus: PaintEssence = { red: 10, blue: 10, yellow: 10 };
+-          setPaint(prev => ({
++          setPaint((prev: PaintEssence) => ({
+             red: prev.red + bonus.red,
+             blue: prev.blue + bonus.blue,
+             yellow: prev.yellow + bonus.yellow,
+@@ -387,13 +396,14 @@ export default function CanvasDefender() {
+       }
+     }
+ 
+-    setEnemies(prev => {
++    setEnemies((prev: Enemy[]) => {
+       const updatedEnemies: Enemy[] = [];
+       let damage = 0;
+ 
+-      prev.forEach(enemy => {
++      prev.forEach((enemy: Enemy) => {
+         if (enemy.pathIndex >= PATH.length - 1) {
+           damage += enemy.isElite ? 15 : 10;
++          enemiesReachedCoreRef.current = true;
+           return;
+         }
+ 
+@@ -417,13 +427,13 @@ export default function CanvasDefender() {
+       });
+ 
+       if (damage > 0) {
+-        setCoreHealth(h => Math.max(0, h - damage));
++        setCoreHealth((h: number) => Math.max(0, h - damage));
+       }
+ 
+       return updatedEnemies;
+     });
+ 
+-    setCoreHealth(h => {
++    setCoreHealth((h: number) => {
+       if (h <= 0) {
+         setGameState('gameOver');
+       }
+@@ -432,15 +442,15 @@ export default function CanvasDefender() {
+ 
+     const currentModifiers = activeModifiers;
+ 
+-    setTowers(prev => {
++    setTowers((prev: Tower[]) => {
+       const currentTime = Date.now();
+-      prev.forEach(tower => {
++      prev.forEach((tower: Tower) => {
+         if (currentTime - tower.lastAttack < tower.attackSpeed) return;
+ 
+         const towerCenterX = tower.x * CELL_SIZE + CELL_SIZE / 2;
+         const towerCenterY = tower.y * CELL_SIZE + CELL_SIZE / 2;
+ 
+-        const inRange = enemies.filter(e => {
++        const inRange = enemies.filter((e: Enemy) => {
+           const dist = Math.sqrt(
+             Math.pow(e.x - towerCenterX, 2) + Math.pow(e.y - towerCenterY, 2)
+           );
+@@ -470,23 +480,23 @@ export default function CanvasDefender() {
+             type: tower.type === 'blue' ? 'slow' : tower.type === 'yellow' ? 'pierce' : 'normal',
+           };
+ 
+-          setProjectiles(p => [...p, projectile]);
++          setProjectiles((p: Projectile[]) => [...p, projectile]);
+         }
+       });
+       return [...prev];
+     });
+ 
+-    setProjectiles(prev => {
++    setProjectiles((prev: Projectile[]) => {
+       const remaining: Projectile[] = [];
+ 
+-      prev.forEach(proj => {
++      prev.forEach((proj: Projectile) => {
+         const dx = proj.targetX - proj.x;
+         const dy = proj.targetY - proj.y;
+         const dist = Math.sqrt(dx * dx + dy * dy);
+ 
+         if (dist < 10) {
+-          setEnemies(enemies => {
+-            const updated = enemies.map(e => {
++          setEnemies((enemies: Enemy[]) => {
++            const updated = enemies.map((e: Enemy) => {
+               const eDist = Math.sqrt(Math.pow(e.x - proj.x, 2) + Math.pow(e.y - proj.y, 2));
+               const hitRange = proj.type === 'pierce' ? 60 : 25;
+ 
+@@ -495,7 +505,7 @@ export default function CanvasDefender() {
+                 const newHealth = e.health - proj.damage;
+ 
+                 if (newHealth <= 0) {
+-                  const colorType = e.colorType === 'mixed' ?
++                  const colorType: PaintColor = e.colorType === 'mixed' ?
+                     (['red', 'blue', 'yellow'] as const)[Math.floor(Math.random() * 3)] :
+                     e.colorType;
+                   const baseGain = 8 + Math.floor(e.maxHealth / 15);
+@@ -505,9 +515,9 @@ export default function CanvasDefender() {
+                     ? activeEventEffectsRef.current.paintReductionMult : 0;
+                   const paintGain = Math.floor(baseGain * bonusMult * (1 - paintReduction));
+ 
+-                  setPaint((p: PaintEssence) => ({ ...p, [colorType]: p[colorType] + paintGain }));
+-                  setScore(s => s + 15 + Math.floor(e.maxHealth / 10) + (e.isElite ? 25 : 0));
+-                  setEnemiesKilled(k => k + 1);
++                  setPaint((p: PaintEssence) => addPaint(p, colorType, paintGain));
++                  setScore((s: number) => s + 15 + Math.floor(e.maxHealth / 10) + (e.isElite ? 25 : 0));
++                  setEnemiesKilled((k: number) => k + 1);
+                   createParticles(e.x, e.y, e.color, e.isElite ? 12 : 8);
+                   return { ...e, health: 0 };
+                 }
+@@ -533,14 +543,14 @@ export default function CanvasDefender() {
+                       damage: proj.damage * 0.5,
+                       type: 'normal',
+                     };
+-                    setProjectiles(p => [...p, splitProj]);
++                    setProjectiles((p: Projectile[]) => [...p, splitProj]);
+                   }
+                 }
+ 
+                 return { ...e, health: newHealth };
+               }
+               return e;
+-            }).filter(e => e.health > 0);
++            }).filter((e: Enemy) => e.health > 0);
+ 
+             return updated;
+           });
+@@ -554,13 +564,13 @@ export default function CanvasDefender() {
+       return remaining;
+     });
+ 
+-    setParticles(prev => prev.map(p => ({
++    setParticles((prev: Particle[]) => prev.map((p: Particle) => ({
+       ...p,
+       x: p.x + p.velocityX,
+       y: p.y + p.velocityY,
+       life: p.life - 1,
+       size: p.size * 0.95,
+-    })).filter(p => p.life > 0));
++    })).filter((p: Particle) => p.life > 0));
+ 
+     gameLoopRef.current = requestAnimationFrame(gameLoop);
+   }, [gameState, enemies, wave, waveInProgress, spawnEnemy, activeModifiers, difficultyDirector, waveStartTime, addReplayAction]);
+@@ -585,7 +595,7 @@ export default function CanvasDefender() {
+ 
+   useEffect(() => {
+     if (campaignEvents.length > 0) {
+-      const hasTowerBuff = campaignEvents.some(e => e.effect.type === 'towerBuff' && e.remainingWaves > 0);
++      const hasTowerBuff = campaignEvents.some((e: import('./types/campaign').CampaignEvent) => e.effect.type === 'towerBuff' && e.remainingWaves > 0);
+       if (hasTowerBuff && buffedTowerIdRef.current === null && towers.length > 0) {
+         const randomIdx = Math.floor(Math.random() * towers.length);
+         buffedTowerIdRef.current = towers[randomIdx].id;
+@@ -602,7 +612,7 @@ export default function CanvasDefender() {
+       if (healAmount >= 999) {
+         setCoreHealth(200);
+       } else {
+-        setCoreHealth(h => Math.min(h + healAmount, 100));
++        setCoreHealth((h: number) => Math.min(h + healAmount, 100));
+       }
+     }
+ 
+@@ -622,12 +632,19 @@ export default function CanvasDefender() {
+       paintTotal: paint.red + paint.blue + paint.yellow,
+       towerCount: towers.length,
+       lastWaveDurationMs: Date.now() - waveStartTime,
+-      enemiesReachedCore: false,
++      enemiesReachedCore: enemiesReachedCoreRef.current,
+       buildStrengthScore: newBuild.buildTags.length * 0.15,
+       previousDifficulty: difficultyDirector,
+     });
+     setDifficultyDirector(newDiff);
+ 
++    difficultyHistoryRef.current.push({
++      wave: wave + 1,
++      enemyCount: 5 + (wave + 1) * 3 + newDiff.enemyCountMod,
++      enemyHealth: newDiff.enemyHealthMod,
++      enemySpeed: newDiff.enemySpeedMod,
++    });
++
+     addReplayAction('DIFFICULTY_CHANGE', {
+       enemyCountMod: newDiff.enemyCountMod,
+       enemyHealthMod: newDiff.enemyHealthMod,
+@@ -637,7 +654,7 @@ export default function CanvasDefender() {
+     if (shouldTriggerEvent(wave)) {
+       const evt = generateEvent(wave);
+       if (evt) {
+-        setCampaignEvents(prev => [...prev, evt]);
++        setCampaignEvents((prev: import('./types/campaign').CampaignEvent[]) => [...prev, evt]);
+         addReplayAction('TRIGGER_EVENT', { eventId: evt.id, eventName: evt.name });
+       }
+     }
+@@ -655,15 +672,15 @@ export default function CanvasDefender() {
+       selectedRewards: newBuild.selectedRewards,
+       buildTags: newBuild.buildTags,
+       difficultyDirector: newDiff,
+-      activeEvents: campaignEvents.filter(e => e.remainingWaves > 0),
++      activeEvents: campaignEvents.filter((e: import('./types/campaign').CampaignEvent) => e.remainingWaves > 0),
+       eventHistory: campaignEvents,
+-      difficultyHistory: [],
++      difficultyHistory: difficultyHistoryRef.current,
+     };
+     saveCampaign(campaignState, newBuild, campaignStats);
+     setHasSave(true);
+ 
+-    setCampaignEvents(prev =>
+-      prev.map(updateEventRemaining).filter(e => !isEventExpired(e))
++    setCampaignEvents((prev: import('./types/campaign').CampaignEvent[]) =>
++      prev.map(updateEventRemaining).filter((e: import('./types/campaign').CampaignEvent) => !isEventExpired(e))
+     );
+ 
+     setGameState('playing');
+@@ -679,6 +696,8 @@ export default function CanvasDefender() {
+     enemiesSpawnedRef.current = 0;
+     spawnTimerRef.current = 0;
+     buffedTowerIdRef.current = null;
++    enemiesReachedCoreRef.current = false;
++    difficultyHistoryRef.current = [];
+ 
+     setGameState('playing');
+     setWave(1);
+@@ -739,12 +758,13 @@ export default function CanvasDefender() {
+     setCurrentReplay(null);
+     setIsHighScore(false);
+     setWaveStartTime(0);
++    difficultyHistoryRef.current = campaign.difficultyHistory || [];
+ 
+     const newReplay = createReplay(campaign.seed);
+     setReplay(newReplay);
+ 
+     for (const reward of build.selectedRewards) {
+-      setActiveModifiers(prev => applyRewardEffect(reward, prev));
++      setActiveModifiers((prev: ActiveRewardModifiers) => applyRewardEffect(reward, prev));
+     }
+ 
+     deleteCampaign();
+@@ -761,9 +781,9 @@ export default function CanvasDefender() {
+     selectedRewards: playerBuild.selectedRewards,
+     buildTags: playerBuild.buildTags,
+     difficultyDirector,
+-    activeEvents: campaignEvents.filter(e => e.remainingWaves > 0),
++    activeEvents: campaignEvents.filter((e: import('./types/campaign').CampaignEvent) => e.remainingWaves > 0),
+     eventHistory: campaignEvents,
+-    difficultyHistory: [],
++    difficultyHistory: difficultyHistoryRef.current,
+   });
+ 
+   const handleGameEnd = (isVictory: boolean) => {
+@@ -776,7 +796,7 @@ export default function CanvasDefender() {
+       coreHealth,
+       enemiesKilled,
+       buildTags: playerBuild.buildTags,
+-      selectedRewards: playerBuild.selectedRewards.map(r => ({ name: r.name, rarity: r.rarity })),
++      selectedRewards: playerBuild.selectedRewards.map((r: Reward) => ({ name: r.name, rarity: r.rarity })),
+     });
+     setCurrentReplay(updatedReplay);
+ 
+@@ -803,12 +823,12 @@ export default function CanvasDefender() {
+   }, [gameState]); // eslint-disable-line react-hooks/exhaustive-deps
+ 
+   const upgradeTower = (towerId: number) => {
+-    const tower = towers.find(t => t.id === towerId);
++    const tower = towers.find((t: Tower) => t.id === towerId);
+     if (!tower || tower.level >= 5) return;
+     const cost = tower.level * 25;
+     if (paint[tower.type] >= cost) {
+-      setPaint(prev => ({ ...prev, [tower.type]: prev[tower.type] - cost }));
+-      setTowers(prev => prev.map(t =>
++      setPaint((prev: PaintEssence) => ({ ...prev, [tower.type]: prev[tower.type] - cost }));
++      setTowers((prev: Tower[]) => prev.map((t: Tower) =>
+         t.id === towerId
+           ? { ...t, level: t.level + 1, damage: Math.floor(t.damage * 1.4), range: t.range + 0.2 }
+           : t
+@@ -892,9 +912,9 @@ export default function CanvasDefender() {
+           replay={currentReplay}
+           isHighScore={isHighScore}
+           towerColorCounts={{
+-            red: towers.filter(t => t.type === 'red').length,
+-            blue: towers.filter(t => t.type === 'blue').length,
+-            yellow: towers.filter(t => t.type === 'yellow').length,
++            red: towers.filter((t: Tower) => t.type === 'red').length,
++            blue: towers.filter((t: Tower) => t.type === 'blue').length,
++            yellow: towers.filter((t: Tower) => t.type === 'yellow').length,
+           }}
+           onRestart={startGame}
+           onViewReplay={() => setShowReplay(true)}
+@@ -910,9 +930,9 @@ export default function CanvasDefender() {
+           replay={currentReplay}
+           isHighScore={isHighScore}
+           towerColorCounts={{
+-            red: towers.filter(t => t.type === 'red').length,
+-            blue: towers.filter(t => t.type === 'blue').length,
+-            yellow: towers.filter(t => t.type === 'yellow').length,
++            red: towers.filter((t: Tower) => t.type === 'red').length,
++            blue: towers.filter((t: Tower) => t.type === 'blue').length,
++            yellow: towers.filter((t: Tower) => t.type === 'yellow').length,
+           }}
+           onRestart={startGame}
+           onViewReplay={() => setShowReplay(true)}
+@@ -972,7 +992,7 @@ export default function CanvasDefender() {
+             </h3>
+ 
+             <div className="space-y-2 mb-4">
+-              {(['red', 'blue', 'yellow'] as const).map(type => (
++              {(['red', 'blue', 'yellow'] as const).map((type: PaintColor) => (
+                 <button
+                   key={type}
+                   onClick={() => setSelectedTowerType(selectedTowerType === type ? null : type)}
+@@ -1004,7 +1024,7 @@ export default function CanvasDefender() {
+             </h3>
+ 
+             <div className="grid grid-cols-3 gap-1 mb-4">
+-              {(['pencil', 'watercolor', 'oil'] as const).map(style => (
++              {(['pencil', 'watercolor', 'oil'] as const).map((style: 'pencil' | 'watercolor' | 'oil') => (
+                 <button
+                   key={style}
+                   onClick={() => setSelectedStyle(style)}
+@@ -1120,7 +1140,7 @@ export default function CanvasDefender() {
+                 );
+               })}
+ 
+-              {towers.map(tower => (
++              {towers.map((tower: Tower) => (
+                 <div key={tower.id}
+                      className="absolute flex flex-col items-center justify-center cursor-pointer group tower-brush"
+                      style={{ left: tower.x * CELL_SIZE + 2, top: tower.y * CELL_SIZE + 2, width: CELL_SIZE - 4, height: CELL_SIZE - 4 }}
+@@ -1153,7 +1173,7 @@ export default function CanvasDefender() {
+                 </div>
+               ))}
+ 
+-              {enemies.map(enemy => (
++              {enemies.map((enemy: Enemy) => (
+                 <div key={enemy.id}
+                      className="absolute flex flex-col items-center"
+                      style={{ left: enemy.x - 18, top: enemy.y - 24, transition: 'none' }}>
+@@ -1177,7 +1197,7 @@ export default function CanvasDefender() {
+                 </div>
+               ))}
+ 
+-              {projectiles.map(proj => (
++              {projectiles.map((proj: Projectile) => (
+                 <div key={proj.id}
+                      className="absolute rounded-full"
+                      style={{
+@@ -1189,7 +1209,7 @@ export default function CanvasDefender() {
+                      }} />
+               ))}
+ 
+-              {particles.map(p => (
++              {particles.map((p: Particle) => (
+                 <div key={p.id}
+                      className="absolute rounded-full pointer-events-none"
+                      style={{
+@@ -1229,8 +1249,8 @@ export default function CanvasDefender() {
+               </h3>
+ 
+               <div className="grid grid-cols-3 gap-2 mb-4">
+-                {(['red', 'blue', 'yellow'] as const).map(type =>
+-                  (['pencil', 'watercolor', 'oil'] as const).map(style => {
++                {(['red', 'blue', 'yellow'] as const).map((type: PaintColor) =>
++                  (['pencil', 'watercolor', 'oil'] as const).map((style: 'pencil' | 'watercolor' | 'oil') => {
+                     const key = `${type}-${style}`;
+                     const collected = collectedTowers.has(key);
+                     return (
+@@ -1282,4 +1302,4 @@ export default function CanvasDefender() {
+       </div>
+     </div>
+   );
+-}
+\ No newline at end of file
++}
