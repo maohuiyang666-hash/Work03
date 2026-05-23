@@ -1,0 +1,1625 @@
+diff --git a/repo/src/App.tsx b/repo/src/App.tsx
+index 4470419..f7d6adc 100644
+--- a/repo/src/App.tsx
++++ b/repo/src/App.tsx
+@@ -1,34 +1,80 @@
+ import { useState, useEffect, useCallback, useRef } from 'react';
+ 
+-// 类型定义
++// ===== 类型定义 =====
++
++type ElementType = 'red' | 'blue' | 'yellow' | 'purple' | 'orange' | 'green' | 'white';
++type StatusType = 'burning' | 'frozen' | 'shocked' | 'corroded' | 'bursting';
++type ReactionType = 'steamBurst' | 'coolingBrittle' | 'chainConduct' | 'none';
++
+ interface Position {
+   x: number;
+   y: number;
+ }
+ 
++interface ElementResistance {
++  red: number;
++  blue: number;
++  yellow: number;
++  purple: number;
++  orange: number;
++  green: number;
++  white: number;
++}
++
++interface ElementWeakness {
++  red: number;
++  blue: number;
++  yellow: number;
++  purple: number;
++  orange: number;
++  green: number;
++  white: number;
++}
++
++interface StatusEffect {
++  id: number;
++  type: StatusType;
++  duration: number;
++  maxDuration: number;
++  stacks: number;
++  maxStacks: number;
++  damagePerSecond: number;
++  lastTick: number;
++}
++
+ interface Enemy {
+   id: number;
+   x: number;
+   y: number;
+   health: number;
+   maxHealth: number;
++  baseSpeed: number;
+   speed: number;
+   color: string;
+   colorType: 'red' | 'blue' | 'yellow' | 'mixed';
+   pathIndex: number;
++  statuses: StatusEffect[];
++  resistance: ElementResistance;
++  weakness: ElementWeakness;
++  immuneStatuses: StatusType[];
++  originalSpeed: number;
+ }
+ 
+ interface Tower {
+   id: number;
+   x: number;
+   y: number;
+-  type: 'red' | 'blue' | 'yellow';
++  type: ElementType;
++  baseType: 'red' | 'blue' | 'yellow';
+   level: number;
+   range: number;
+   damage: number;
+   attackSpeed: number;
+   lastAttack: number;
+   style: 'pencil' | 'watercolor' | 'oil';
++  isFused: boolean;
++  fusedFrom: { x: number; y: number }[];
++  damageContribution: number;
+ }
+ 
+ interface Projectile {
+@@ -37,10 +83,12 @@ interface Projectile {
+   y: number;
+   targetX: number;
+   targetY: number;
++  targetEnemyId: number;
+   color: string;
+   speed: number;
+   damage: number;
+-  type: 'normal' | 'slow' | 'pierce';
++  elementType: ElementType;
++  type: 'normal' | 'slow' | 'pierce' | 'explosive' | 'bounce' | 'corrosive';
+ }
+ 
+ interface Particle {
+@@ -52,6 +100,7 @@ interface Particle {
+   life: number;
+   velocityX: number;
+   velocityY: number;
++  type: 'normal' | 'status' | 'reaction' | 'fusion';
+ }
+ 
+ interface PaintEssence {
+@@ -60,7 +109,24 @@ interface PaintEssence {
+   yellow: number;
+ }
+ 
+-// 游戏常量
++interface BattleLogEntry {
++  id: number;
++  timestamp: number;
++  type: 'reaction' | 'statusApplied' | 'statusRemoved' | 'enemyKilled' | 'damage' | 'fusion';
++  message: string;
++  color: string;
++}
++
++interface ReactionRecord {
++  id: number;
++  type: ReactionType;
++  x: number;
++  y: number;
++  createdAt: number;
++}
++
++// ===== 游戏常量 =====
++
+ const GRID_SIZE = 10;
+ const CELL_SIZE = 50;
+ 
+@@ -89,7 +155,6 @@ const generatePathLines = () => {
+ };
+ 
+ const PATH_LINES = generatePathLines();
+-
+ const CORE_POSITION = { x: 9, y: 4 };
+ 
+ const TOWER_COSTS: Record<string, PaintEssence> = {
+@@ -98,7 +163,77 @@ const TOWER_COSTS: Record<string, PaintEssence> = {
+   yellow: { red: 0, blue: 0, yellow: 30 },
+ };
+ 
++// ===== 辅助函数 =====
++
++const getColorValue = (type: ElementType): string => {
++  const colors: Record<ElementType, string> = {
++    red: '#e74c3c',
++    blue: '#3498db',
++    yellow: '#f39c12',
++    purple: '#9b59b6',
++    orange: '#e67e22',
++    green: '#27ae60',
++    white: '#ecf0f1',
++  };
++  return colors[type];
++};
++
++const getStatusIcon = (type: StatusType): string => {
++  const icons: Record<StatusType, string> = {
++    burning: '🔥',
++    frozen: '❄️',
++    shocked: '⚡',
++    corroded: '☠️',
++    bursting: '💥',
++  };
++  return icons[type];
++};
++
++const getStatusName = (type: StatusType): string => {
++  const names: Record<StatusType, string> = {
++    burning: '灼烧',
++    frozen: '冻结',
++    shocked: '电击',
++    corroded: '腐蚀',
++    bursting: '爆裂',
++  };
++  return names[type];
++};
++
++const getReactionName = (type: ReactionType): string => {
++  const names: Record<ReactionType, string> = {
++    steamBurst: '蒸汽爆发',
++    coolingBrittle: '冷却脆化',
++    chainConduct: '连锁导电',
++    none: '',
++  };
++  return names[type];
++};
++
++const getStyleClass = (style: string) => {
++  switch (style) {
++    case 'pencil': return 'border-2 border-dashed';
++    case 'watercolor': return 'opacity-80';
++    case 'oil': return 'border-4';
++    default: return '';
++  }
++};
++
++const getTowerName = (type: ElementType): string => {
++  const names: Record<ElementType, string> = {
++    red: '烈焰塔',
++    blue: '寒冰塔',
++    yellow: '雷电塔',
++    purple: '腐蚀塔',
++    orange: '爆裂塔',
++    green: '弹射塔',
++    white: '核心塔',
++  };
++  return names[type];
++};
++
+ export default function CanvasDefender() {
++  // ===== 状态管理 =====
+   const [gameState, setGameState] = useState<'menu' | 'playing' | 'paused' | 'gameOver' | 'victory'>('menu');
+   const [wave, setWave] = useState(1);
+   const [coreHealth, setCoreHealth] = useState(100);
+@@ -113,44 +248,269 @@ export default function CanvasDefender() {
+   const [enemiesKilled, setEnemiesKilled] = useState(0);
+   const [waveInProgress, setWaveInProgress] = useState(false);
+   const [collectedTowers, setCollectedTowers] = useState<Set<string>>(new Set());
++  const [battleLogs, setBattleLogs] = useState<BattleLogEntry[]>([]);
++  const [reactions, setReactions] = useState<ReactionRecord[]>([]);
++  const [maxChainCount, setMaxChainCount] = useState(0);
++  const [currentChainCount, setCurrentChainCount] = useState(0);
++  const [showDebugPanel, setShowDebugPanel] = useState(true);
+ 
++  // ===== 引用 =====
+   const gameLoopRef = useRef<number | null>(null);
+   const enemyIdRef = useRef(0);
+   const towerIdRef = useRef(0);
+   const projectileIdRef = useRef(0);
+   const particleIdRef = useRef(0);
++  const statusIdRef = useRef(0);
++  const logIdRef = useRef(0);
+   const lastUpdateRef = useRef(Date.now());
+   const enemiesSpawnedRef = useRef(0);
+   const spawnTimerRef = useRef(0);
+ 
+-  const getColorValue = (type: 'red' | 'blue' | 'yellow'): string => {
+-    const colors = {
+-      red: '#e74c3c',
+-      blue: '#3498db',
+-      yellow: '#f39c12',
++  // ===== 游戏核心功能 =====
++
++  const addBattleLog = useCallback((entry: Omit<BattleLogEntry, 'id' | 'timestamp'>) => {
++    const newEntry: BattleLogEntry = {
++      ...entry,
++      id: logIdRef.current++,
++      timestamp: Date.now(),
+     };
+-    return colors[type];
+-  };
++    setBattleLogs(prev => [newEntry, ...prev].slice(0, 50));
++  }, []);
++
++  const createParticles = useCallback((x: number, y: number, color: string, count: number = 5, type: Particle['type'] = 'normal') => {
++    const newParticles: Particle[] = [];
++    for (let i = 0; i < count; i++) {
++      newParticles.push({
++        id: particleIdRef.current++,
++        x,
++        y,
++        color,
++        size: 4 + Math.random() * (type === 'reaction' ? 8 : 4),
++        life: type === 'reaction' ? 40 + Math.random() * 20 : 30 + Math.random() * 20,
++        velocityX: (Math.random() - 0.5) * (type === 'reaction' ? 8 : 4),
++        velocityY: (Math.random() - 0.5) * (type === 'reaction' ? 8 : 4),
++        type,
++      });
++    }
++    setParticles(prev => [...prev, ...newParticles]);
++  }, []);
++
++  const createStatusEffect = useCallback((type: StatusType): StatusEffect => {
++    const configs: Record<StatusType, Partial<StatusEffect>> = {
++      burning: { duration: 5, maxDuration: 8, maxStacks: 3, damagePerSecond: 8 },
++      frozen: { duration: 2, maxDuration: 3, maxStacks: 1, damagePerSecond: 0 },
++      shocked: { duration: 4, maxDuration: 6, maxStacks: 2, damagePerSecond: 3 },
++      corroded: { duration: 6, maxDuration: 8, maxStacks: 3, damagePerSecond: 5 },
++      bursting: { duration: 3, maxDuration: 5, maxStacks: 1, damagePerSecond: 0 },
++    };
++    const config = configs[type];
++    return {
++      id: statusIdRef.current++,
++      type,
++      duration: config.duration || 5,
++      maxDuration: config.maxDuration || 8,
++      stacks: 1,
++      maxStacks: config.maxStacks || 3,
++      damagePerSecond: config.damagePerSecond || 0,
++      lastTick: Date.now(),
++    };
++  }, []);
++
++  const applyStatusToEnemy = useCallback((enemy: Enemy, statusType: StatusType): Enemy => {
++    if (enemy.immuneStatuses.includes(statusType)) return enemy;
++
++    const existingStatus = enemy.statuses.find(s => s.type === statusType);
++    let newStatuses: StatusEffect[];
++
++    if (existingStatus) {
++      newStatuses = enemy.statuses.map(s => {
++        if (s.type === statusType) {
++          return {
++            ...s,
++            duration: Math.min(s.maxDuration, s.duration + 2),
++            stacks: Math.min(s.maxStacks, s.stacks + 1),
++            lastTick: Date.now(),
++          };
++        }
++        return s;
++      });
++    } else {
++      newStatuses = [...enemy.statuses, createStatusEffect(statusType)];
++      addBattleLog({
++        type: 'statusApplied',
++        message: `${getStatusName(statusType)} 已施加`,
++        color: getColorValue(statusType === 'burning' ? 'red' : statusType === 'frozen' ? 'blue' : statusType === 'shocked' ? 'yellow' : 'purple'),
++      });
++    }
++
++    return { ...enemy, statuses: newStatuses };
++  }, [createStatusEffect, addBattleLog]);
++
++  const calculateDamage = useCallback((baseDamage: number, elementType: ElementType, enemy: Enemy): number => {
++    const resistance = enemy.resistance[elementType] || 0;
++    const weakness = enemy.weakness[elementType] || 0;
++    const corrosionStacks = enemy.statuses.find(s => s.type === 'corroded')?.stacks || 0;
++    
++    let damage = baseDamage * (1 - resistance * 0.15);
++    damage *= (1 + weakness * 0.25);
++    damage *= (1 + corrosionStacks * 0.1);
++    
++    return Math.max(1, Math.floor(damage));
++  }, []);
++
++  const checkAndTriggerReaction = useCallback((enemy: Enemy, attackingElement: ElementType, x: number, y: number): { triggered: boolean; reaction: ReactionType; bonusDamage: number } => {
++    let reaction: ReactionType = 'none';
++    let bonusDamage = 0;
++
++    const hasBurning = enemy.statuses.some(s => s.type === 'burning');
++    const hasFrozen = enemy.statuses.some(s => s.type === 'frozen');
++    const hasShocked = enemy.statuses.some(s => s.type === 'shocked');
++
++    if (hasFrozen && attackingElement === 'red') {
++      reaction = 'steamBurst';
++      bonusDamage = 25;
++    } else if (hasBurning && attackingElement === 'blue') {
++      reaction = 'coolingBrittle';
++      bonusDamage = 15;
++    } else if (hasShocked && attackingElement === 'yellow') {
++      reaction = 'chainConduct';
++      bonusDamage = 20;
++    }
+ 
+-  const getStyleClass = (style: string) => {
+-    switch (style) {
+-      case 'pencil': return 'border-2 border-dashed';
+-      case 'watercolor': return 'opacity-80';
+-      case 'oil': return 'border-4';
+-      default: return '';
++    if (reaction !== 'none') {
++      addBattleLog({
++        type: 'reaction',
++        message: `元素反应: ${getReactionName(reaction)}!`,
++        color: getColorValue(reaction === 'steamBurst' ? 'purple' : reaction === 'coolingBrittle' ? 'green' : 'orange'),
++      });
++      createParticles(x, y, reaction === 'steamBurst' ? '#9b59b6' : reaction === 'coolingBrittle' ? '#27ae60' : '#f39c12', 15, 'reaction');
++      setReactions(prev => [...prev, { id: Date.now(), type: reaction, x, y, createdAt: Date.now() }]);
++      setCurrentChainCount(prev => {
++        const newCount = prev + 1;
++        setMaxChainCount(max => Math.max(max, newCount));
++        return newCount;
++      });
+     }
+-  };
+ 
+-  const canPlaceTower = (x: number, y: number): boolean => {
++    return { triggered: reaction !== 'none', reaction, bonusDamage };
++  }, [addBattleLog, createParticles]);
++
++  const checkFusionTowers = useCallback((currentTowers: Tower[]): Tower[] => {
++    const newTowers = [...currentTowers];
++    const towerMap = new Map<string, Tower>();
++    newTowers.forEach(t => towerMap.set(`${t.x},${t.y}`, t));
++
++    const directions = [{ x: -1, y: 0 }, { x: 1, y: 0 }, { x: 0, y: -1 }, { x: 0, y: 1 }];
++    
++    for (let i = newTowers.length - 1; i >= 0; i--) {
++      const tower = newTowers[i];
++      if (tower.isFused) continue;
++
++      const neighbors: Tower[] = [];
++      directions.forEach(dir => {
++        const neighbor = towerMap.get(`${tower.x + dir.x},${tower.y + dir.y}`);
++        if (neighbor && !neighbor.isFused && neighbor.baseType !== tower.baseType) {
++          neighbors.push(neighbor);
++        }
++      });
++
++      if (neighbors.length >= 2) {
++        const types = new Set([tower.baseType, ...neighbors.slice(0, 2).map(n => n.baseType)]);
++        if (types.size === 3) {
++          const avgLevel = Math.floor((tower.level + neighbors[0].level + neighbors[1].level) / 3);
++          const newTower: Tower = {
++            id: towerIdRef.current++,
++            x: tower.x,
++            y: tower.y,
++            type: 'white',
++            baseType: tower.baseType,
++            level: avgLevel,
++            range: 3.5,
++            damage: Math.floor((tower.damage + neighbors[0].damage + neighbors[1].damage) * 1.5),
++            attackSpeed: Math.floor((tower.attackSpeed + neighbors[0].attackSpeed + neighbors[1].attackSpeed) / 3),
++            lastAttack: 0,
++            style: tower.style,
++            isFused: true,
++            fusedFrom: [{ x: tower.x, y: tower.y }, { x: neighbors[0].x, y: neighbors[0].y }, { x: neighbors[1].x, y: neighbors[1].y }],
++            damageContribution: 0,
++          };
++
++          const removePositions = new Set([`${tower.x},${tower.y}`, `${neighbors[0].x},${neighbors[0].y}`, `${neighbors[1].x},${neighbors[1].y}`]);
++          const filteredTowers = newTowers.filter(t => !removePositions.has(`${t.x},${t.y}`));
++          filteredTowers.push(newTower);
++          
++          addBattleLog({
++            type: 'fusion',
++            message: '三原色融合: 核心塔觉醒!',
++            color: '#ecf0f1',
++          });
++          createParticles(tower.x * CELL_SIZE + CELL_SIZE / 2, tower.y * CELL_SIZE + CELL_SIZE / 2, '#ecf0f1', 20, 'fusion');
++          
++          return checkFusionTowers(filteredTowers);
++        }
++      }
++
++      if (neighbors.length >= 1) {
++        const neighbor = neighbors[0];
++        const types = [tower.baseType, neighbor.baseType].sort();
++        let fusedType: ElementType = 'red';
++        
++        if ((types[0] === 'blue' && types[1] === 'red') || (types[0] === 'red' && types[1] === 'blue')) {
++          fusedType = 'purple';
++        } else if ((types[0] === 'yellow' && types[1] === 'red') || (types[0] === 'red' && types[1] === 'yellow')) {
++          fusedType = 'orange';
++        } else if ((types[0] === 'blue' && types[1] === 'yellow') || (types[0] === 'yellow' && types[1] === 'blue')) {
++          fusedType = 'green';
++        }
++
++        if (fusedType !== 'red') {
++          const avgLevel = Math.floor((tower.level + neighbor.level) / 2);
++          const newTower: Tower = {
++            id: towerIdRef.current++,
++            x: tower.x,
++            y: tower.y,
++            type: fusedType,
++            baseType: tower.baseType,
++            level: avgLevel,
++            range: fusedType === 'orange' ? 3 : 2.5,
++            damage: Math.floor((tower.damage + neighbor.damage) * 1.2),
++            attackSpeed: Math.floor((tower.attackSpeed + neighbor.attackSpeed) / 2),
++            lastAttack: 0,
++            style: tower.style,
++            isFused: true,
++            fusedFrom: [{ x: tower.x, y: tower.y }, { x: neighbor.x, y: neighbor.y }],
++            damageContribution: 0,
++          };
++
++          const removePositions = new Set([`${tower.x},${tower.y}`, `${neighbor.x},${neighbor.y}`]);
++          const filteredTowers = newTowers.filter(t => !removePositions.has(`${t.x},${t.y}`));
++          filteredTowers.push(newTower);
++          
++          addBattleLog({
++            type: 'fusion',
++            message: `融合成功: ${getTowerName(fusedType)}!`,
++            color: getColorValue(fusedType),
++          });
++          createParticles(tower.x * CELL_SIZE + CELL_SIZE / 2, tower.y * CELL_SIZE + CELL_SIZE / 2, getColorValue(fusedType), 15, 'fusion');
++          
++          return checkFusionTowers(filteredTowers);
++        }
++      }
++    }
++
++    return newTowers;
++  }, [addBattleLog, createParticles]);
++
++  const canPlaceTower = useCallback((x: number, y: number): boolean => {
+     const isOnPath = PATH.some(p => Math.abs(p.x - x) < 0.5 && Math.abs(p.y - y) < 0.5);
+     if (isOnPath && !(x === CORE_POSITION.x && y === CORE_POSITION.y)) return false;
+     const hasTower = towers.some(t => t.x === x && t.y === y);
+     if (hasTower) return false;
+     if (x < 0 || x >= GRID_SIZE || y < 0 || y >= GRID_SIZE) return false;
+     return true;
+-  };
++  }, [towers]);
+ 
+-  const placeTower = (x: number, y: number) => {
++  const placeTower = useCallback((x: number, y: number) => {
+     if (!selectedTowerType || gameState !== 'playing') return;
+     if (!canPlaceTower(x, y)) return;
+ 
+@@ -163,15 +523,22 @@ export default function CanvasDefender() {
+       x,
+       y,
+       type: selectedTowerType,
++      baseType: selectedTowerType,
+       level: 1,
+       range: 2.5,
+       damage: Math.floor(15 * styleMultiplier),
+       attackSpeed: selectedStyle === 'watercolor' ? 1200 : selectedStyle === 'pencil' ? 800 : 1500,
+       lastAttack: 0,
+       style: selectedStyle,
++      isFused: false,
++      fusedFrom: [],
++      damageContribution: 0,
+     };
+ 
+-    setTowers(prev => [...prev, newTower]);
++    setTowers(prev => {
++      const updated = [...prev, newTower];
++      return checkFusionTowers(updated);
++    });
+     setPaint(prev => ({
+       red: prev.red - cost.red,
+       blue: prev.blue - cost.blue,
+@@ -182,7 +549,7 @@ export default function CanvasDefender() {
+     if (!collectedTowers.has(towerKey)) {
+       setCollectedTowers(prev => new Set(prev).add(towerKey));
+     }
+-  };
++  }, [selectedTowerType, gameState, canPlaceTower, paint, selectedStyle, checkFusionTowers, collectedTowers]);
+ 
+   const spawnEnemy = useCallback(() => {
+     const colorTypes: Array<'red' | 'blue' | 'yellow' | 'mixed'> = ['red', 'blue', 'yellow'];
+@@ -196,44 +563,63 @@ export default function CanvasDefender() {
+       mixed: ['#8e44ad', '#16a085', '#d35400'][Math.floor(Math.random() * 3)],
+     };
+ 
++    const baseResistance: ElementResistance = {
++      red: 0, blue: 0, yellow: 0, purple: 0, orange: 0, green: 0, white: 0,
++    };
++    const baseWeakness: ElementWeakness = {
++      red: 0, blue: 0, yellow: 0, purple: 0, orange: 0, green: 0, white: 0,
++    };
++    const immuneStatuses: StatusType[] = [];
++
++    if (type === 'red') {
++      baseResistance.red = 2;
++      baseWeakness.blue = 2;
++      immuneStatuses.push('burning');
++    } else if (type === 'blue') {
++      baseResistance.blue = 2;
++      baseWeakness.yellow = 2;
++      immuneStatuses.push('frozen');
++    } else if (type === 'yellow') {
++      baseResistance.yellow = 2;
++      baseWeakness.red = 2;
++      immuneStatuses.push('shocked');
++    } else if (type === 'mixed') {
++      baseResistance.red = 1;
++      baseResistance.blue = 1;
++      baseResistance.yellow = 1;
++      baseResistance.purple = 1;
++      baseResistance.orange = 1;
++      baseResistance.green = 1;
++    }
++
+     const newEnemy: Enemy = {
+       id: enemyIdRef.current++,
+       x: PATH[0].x * CELL_SIZE + CELL_SIZE / 2,
+       y: PATH[0].y * CELL_SIZE + CELL_SIZE / 2,
+       health: 40 + wave * 15,
+       maxHealth: 40 + wave * 15,
++      baseSpeed: 35 + Math.min(wave * 3, 25),
+       speed: 35 + Math.min(wave * 3, 25),
++      originalSpeed: 35 + Math.min(wave * 3, 25),
+       color: colors[type],
+       colorType: type,
+       pathIndex: 0,
++      statuses: [],
++      resistance: baseResistance,
++      weakness: baseWeakness,
++      immuneStatuses,
+     };
+ 
+     setEnemies(prev => [...prev, newEnemy]);
+   }, [wave]);
+ 
+-  const startWave = () => {
++  const startWave = useCallback(() => {
+     if (waveInProgress) return;
+     setWaveInProgress(true);
+     enemiesSpawnedRef.current = 0;
+     spawnTimerRef.current = 0;
+-  };
+-
+-  const createParticles = (x: number, y: number, color: string, count: number = 5) => {
+-    const newParticles: Particle[] = [];
+-    for (let i = 0; i < count; i++) {
+-      newParticles.push({
+-        id: particleIdRef.current++,
+-        x,
+-        y,
+-        color,
+-        size: 4 + Math.random() * 4,
+-        life: 30 + Math.random() * 20,
+-        velocityX: (Math.random() - 0.5) * 4,
+-        velocityY: (Math.random() - 0.5) * 4,
+-      });
+-    }
+-    setParticles(prev => [...prev, ...newParticles]);
+-  };
++    setCurrentChainCount(0);
++  }, [waveInProgress]);
+ 
+   const gameLoop = useCallback(() => {
+     if (gameState !== 'playing') {
+@@ -274,6 +660,7 @@ export default function CanvasDefender() {
+     setEnemies(prev => {
+       const updatedEnemies: Enemy[] = [];
+       let damage = 0;
++      const enemiesToRemove: number[] = [];
+ 
+       prev.forEach(enemy => {
+         if (enemy.pathIndex >= PATH.length - 1) {
+@@ -281,30 +668,115 @@ export default function CanvasDefender() {
+           return;
+         }
+ 
++        let updatedEnemy = { ...enemy };
++        
++        const newStatuses: StatusEffect[] = [];
++        let tickDamage = 0;
++        let shouldFreeze = false;
++
++        updatedEnemy.statuses.forEach(status => {
++          const updatedStatus = { ...status };
++          updatedStatus.duration -= delta;
++          
++          if (updatedStatus.type === 'frozen') {
++            shouldFreeze = true;
++          }
++
++          if (updatedStatus.damagePerSecond > 0) {
++            const timeSinceLastTick = now - updatedStatus.lastTick;
++            if (timeSinceLastTick >= 1000) {
++              tickDamage += updatedStatus.damagePerSecond * updatedStatus.stacks;
++              updatedStatus.lastTick = now;
++              createParticles(updatedEnemy.x, updatedEnemy.y, status.type === 'burning' ? '#e74c3c' : status.type === 'corroded' ? '#9b59b6' : '#f39c12', 3, 'status');
++            }
++          }
++
++          if (updatedStatus.duration > 0) {
++            newStatuses.push(updatedStatus);
++          } else {
++            addBattleLog({
++              type: 'statusRemoved',
++              message: `${getStatusName(status.type)} 已消散`,
++              color: getColorValue(status.type === 'burning' ? 'red' : status.type === 'frozen' ? 'blue' : status.type === 'shocked' ? 'yellow' : 'purple'),
++            });
++          }
++        });
++
++        if (shouldFreeze) {
++          updatedEnemy.speed = 0;
++        } else {
++          const slowStacks = newStatuses.filter(s => s.type === 'corroded').reduce((acc, s) => acc + s.stacks, 0);
++          updatedEnemy.speed = Math.max(updatedEnemy.originalSpeed * (1 - slowStacks * 0.15), 10);
++        }
++
++        if (tickDamage > 0) {
++          updatedEnemy.health -= tickDamage;
++        }
++
++        updatedEnemy.statuses = newStatuses;
++
++        if (updatedEnemy.health <= 0) {
++          const paintGain = 8 + Math.floor(updatedEnemy.maxHealth / 15);
++          const colorType = updatedEnemy.colorType === 'mixed' ? 
++            (['red', 'blue', 'yellow'] as const)[Math.floor(Math.random() * 3)] : 
++            updatedEnemy.colorType;
++          
++          setPaint((p: PaintEssence) => ({ ...p, [colorType]: p[colorType] + paintGain }));
++          setScore(s => s + 15 + Math.floor(updatedEnemy.maxHealth / 10));
++          setEnemiesKilled(k => k + 1);
++          
++          addBattleLog({
++            type: 'enemyKilled',
++            message: '敌人被消灭!',
++            color: updatedEnemy.color,
++          });
++
++          if (updatedEnemy.statuses.some(s => s.type === 'bursting') || updatedEnemy.statuses.some(s => s.type === 'shocked')) {
++            createParticles(updatedEnemy.x, updatedEnemy.y, '#f39c12', 20, 'reaction');
++            
++            if (updatedEnemy.statuses.some(s => s.type === 'shocked')) {
++              prev.forEach(otherEnemy => {
++                if (otherEnemy.id !== updatedEnemy.id) {
++                  const dist = Math.sqrt(Math.pow(otherEnemy.x - updatedEnemy.x, 2) + Math.pow(otherEnemy.y - updatedEnemy.y, 2));
++                  if (dist < 100) {
++                    otherEnemy.health -= 15;
++                    otherEnemy = applyStatusToEnemy(otherEnemy, 'shocked');
++                  }
++                }
++              });
++            }
++          } else {
++            createParticles(updatedEnemy.x, updatedEnemy.y, updatedEnemy.color, 8);
++          }
++          
++          enemiesToRemove.push(updatedEnemy.id);
++          return;
++        }
++
+         const target = {
+-          x: PATH[enemy.pathIndex + 1].x * CELL_SIZE + CELL_SIZE / 2,
+-          y: PATH[enemy.pathIndex + 1].y * CELL_SIZE + CELL_SIZE / 2,
++          x: PATH[updatedEnemy.pathIndex + 1].x * CELL_SIZE + CELL_SIZE / 2,
++          y: PATH[updatedEnemy.pathIndex + 1].y * CELL_SIZE + CELL_SIZE / 2,
+         };
+ 
+-        const dx = target.x - enemy.x;
+-        const dy = target.y - enemy.y;
++        const dx = target.x - updatedEnemy.x;
++        const dy = target.y - updatedEnemy.y;
+         const dist = Math.sqrt(dx * dx + dy * dy);
+ 
+         if (dist < 5) {
+-          enemy.pathIndex++;
+-        } else {
+-          enemy.x += (dx / dist) * enemy.speed * delta;
+-          enemy.y += (dy / dist) * enemy.speed * delta;
++          updatedEnemy.pathIndex++;
++        } else if (!shouldFreeze) {
++          updatedEnemy.x += (dx / dist) * updatedEnemy.speed * delta;
++          updatedEnemy.y += (dy / dist) * updatedEnemy.speed * delta;
+         }
+ 
+-        updatedEnemies.push(enemy);
++        updatedEnemies.push(updatedEnemy);
+       });
+ 
+       if (damage > 0) {
+         setCoreHealth(h => Math.max(0, h - damage));
+       }
+ 
+-      return updatedEnemies;
++      return updatedEnemies.filter(e => !enemiesToRemove.includes(e.id));
+     });
+ 
+     setCoreHealth(h => {
+@@ -316,22 +788,29 @@ export default function CanvasDefender() {
+ 
+     setTowers(prev => {
+       const currentTime = Date.now();
+-      prev.forEach(tower => {
+-        if (currentTime - tower.lastAttack < tower.attackSpeed) return;
++      const updatedTowers = prev.map(tower => {
++        const updatedTower = { ...tower };
++        
++        if (currentTime - updatedTower.lastAttack < updatedTower.attackSpeed) return updatedTower;
+ 
+-        const towerCenterX = tower.x * CELL_SIZE + CELL_SIZE / 2;
+-        const towerCenterY = tower.y * CELL_SIZE + CELL_SIZE / 2;
++        const towerCenterX = updatedTower.x * CELL_SIZE + CELL_SIZE / 2;
++        const towerCenterY = updatedTower.y * CELL_SIZE + CELL_SIZE / 2;
+ 
+         const inRange = enemies.filter(e => {
+-          const dist = Math.sqrt(
+-            Math.pow(e.x - towerCenterX, 2) + Math.pow(e.y - towerCenterY, 2)
+-          );
+-          return dist <= tower.range * CELL_SIZE;
++          const dist = Math.sqrt(Math.pow(e.x - towerCenterX, 2) + Math.pow(e.y - towerCenterY, 2));
++          return dist <= updatedTower.range * CELL_SIZE;
+         });
+ 
+         if (inRange.length > 0) {
+           const target = inRange[0];
+-          tower.lastAttack = currentTime;
++          updatedTower.lastAttack = currentTime;
++
++          let projectileType: Projectile['type'] = 'normal';
++          if (updatedTower.type === 'blue') projectileType = 'slow';
++          if (updatedTower.type === 'yellow') projectileType = 'pierce';
++          if (updatedTower.type === 'orange') projectileType = 'explosive';
++          if (updatedTower.type === 'green') projectileType = 'bounce';
++          if (updatedTower.type === 'purple') projectileType = 'corrosive';
+ 
+           const projectile: Projectile = {
+             id: projectileIdRef.current++,
+@@ -339,16 +818,21 @@ export default function CanvasDefender() {
+             y: towerCenterY,
+             targetX: target.x,
+             targetY: target.y,
+-            color: getColorValue(tower.type),
++            targetEnemyId: target.id,
++            color: getColorValue(updatedTower.type),
+             speed: 350,
+-            damage: tower.damage * tower.level,
+-            type: tower.type === 'blue' ? 'slow' : tower.type === 'yellow' ? 'pierce' : 'normal',
++            damage: updatedTower.damage * updatedTower.level,
++            elementType: updatedTower.type,
++            type: projectileType,
+           };
+ 
+           setProjectiles(p => [...p, projectile]);
+         }
++        
++        return updatedTower;
+       });
+-      return [...prev];
++      
++      return updatedTowers;
+     });
+ 
+     setProjectiles(prev => {
+@@ -360,38 +844,64 @@ export default function CanvasDefender() {
+         const dist = Math.sqrt(dx * dx + dy * dy);
+ 
+         if (dist < 10) {
+-          setEnemies(enemies => {
+-            const updated = enemies.map(e => {
+-              const eDist = Math.sqrt(Math.pow(e.x - proj.x, 2) + Math.pow(e.y - proj.y, 2));
+-              const hitRange = proj.type === 'pierce' ? 60 : 25;
++          setEnemies(currentEnemies => {
++            const updatedEnemies = currentEnemies.map(enemy => {
++              let hitEnemy = { ...enemy };
++              
++              const hitDist = Math.sqrt(Math.pow(enemy.x - proj.x, 2) + Math.pow(enemy.y - proj.y, 2));
++              const hitRange = proj.type === 'pierce' || proj.type === 'explosive' ? 60 : 25;
+               
+-              if (eDist < hitRange) {
+-                createParticles(e.x, e.y, proj.color, 3);
+-                const newHealth = e.health - proj.damage;
++              if (hitDist < hitRange) {
++                createParticles(enemy.x, enemy.y, proj.color, 3);
+                 
+-                if (newHealth <= 0) {
+-                  const paintGain = 8 + Math.floor(e.maxHealth / 15);
+-                  const colorType = e.colorType === 'mixed' ? 
+-                    (['red', 'blue', 'yellow'] as const)[Math.floor(Math.random() * 3)] : 
+-                    e.colorType;
+-                  
+-                  setPaint((p: PaintEssence) => ({ ...p, [colorType]: p[colorType] + paintGain }));
+-                  setScore(s => s + 15 + Math.floor(e.maxHealth / 10));
+-                  setEnemiesKilled(k => k + 1);
+-                  createParticles(e.x, e.y, e.color, 8);
+-                  return { ...e, health: 0 };
++                const reactionResult = checkAndTriggerReaction(hitEnemy, proj.elementType, enemy.x, enemy.y);
++                let finalDamage = calculateDamage(proj.damage, proj.elementType, hitEnemy);
++                finalDamage += reactionResult.bonusDamage;
++                
++                hitEnemy.health -= finalDamage;
++                
++                setTowers(t => t.map(tower => {
++                  const towerDist = Math.sqrt(Math.pow(tower.x * CELL_SIZE + CELL_SIZE / 2 - proj.x, 2) + Math.pow(tower.y * CELL_SIZE + CELL_SIZE / 2 - proj.y, 2));
++                  if (towerDist < 80) {
++                    return { ...tower, damageContribution: tower.damageContribution + finalDamage };
++                  }
++                  return tower;
++                }));
++                
++                addBattleLog({
++                  type: 'damage',
++                  message: `造成 ${finalDamage} 点${getTowerName(proj.elementType)}伤害`,
++                  color: getColorValue(proj.elementType),
++                });
++
++                if (proj.elementType === 'red') {
++                  hitEnemy = applyStatusToEnemy(hitEnemy, 'burning');
++                } else if (proj.elementType === 'blue') {
++                  hitEnemy = applyStatusToEnemy(hitEnemy, 'frozen');
++                } else if (proj.elementType === 'yellow') {
++                  hitEnemy = applyStatusToEnemy(hitEnemy, 'shocked');
++                } else if (proj.elementType === 'purple') {
++                  hitEnemy = applyStatusToEnemy(hitEnemy, 'corroded');
++                } else if (proj.elementType === 'orange') {
++                  hitEnemy = applyStatusToEnemy(hitEnemy, 'bursting');
++                } else if (proj.elementType === 'green') {
++                  hitEnemy = applyStatusToEnemy(hitEnemy, 'shocked');
++                  hitEnemy = applyStatusToEnemy(hitEnemy, 'corroded');
++                } else if (proj.elementType === 'white') {
++                  hitEnemy = applyStatusToEnemy(hitEnemy, 'burning');
++                  hitEnemy = applyStatusToEnemy(hitEnemy, 'frozen');
++                  hitEnemy = applyStatusToEnemy(hitEnemy, 'shocked');
+                 }
+ 
+                 if (proj.type === 'slow') {
+-                  return { ...e, health: newHealth, speed: Math.max(15, e.speed * 0.7) };
++                  hitEnemy.speed = Math.max(15, hitEnemy.speed * 0.7);
+                 }
+-                
+-                return { ...e, health: newHealth };
+               }
+-              return e;
+-            }).filter(e => e.health > 0);
++              
++              return hitEnemy;
++            });
+             
+-            return updated;
++            return updatedEnemies;
+           });
+         } else {
+           proj.x += (dx / dist) * proj.speed * delta;
+@@ -411,8 +921,10 @@ export default function CanvasDefender() {
+       size: p.size * 0.95,
+     })).filter(p => p.life > 0));
+ 
++    setReactions(prev => prev.filter(r => now - r.createdAt < 1500));
++
+     gameLoopRef.current = requestAnimationFrame(gameLoop);
+-  }, [gameState, enemies, wave, waveInProgress, spawnEnemy]);
++  }, [gameState, enemies, wave, waveInProgress, spawnEnemy, createParticles, addBattleLog, applyStatusToEnemy, checkAndTriggerReaction, calculateDamage]);
+ 
+   useEffect(() => {
+     lastUpdateRef.current = Date.now();
+@@ -424,7 +936,7 @@ export default function CanvasDefender() {
+     };
+   }, [gameLoop]);
+ 
+-  const startGame = () => {
++  const startGame = useCallback(() => {
+     setGameState('playing');
+     setWave(1);
+     setCoreHealth(100);
+@@ -437,27 +949,32 @@ export default function CanvasDefender() {
+     setEnemiesKilled(0);
+     setWaveInProgress(false);
+     setSelectedTowerType(null);
++    setBattleLogs([]);
++    setReactions([]);
++    setMaxChainCount(0);
++    setCurrentChainCount(0);
+     enemyIdRef.current = 0;
+     towerIdRef.current = 0;
+     projectileIdRef.current = 0;
+     particleIdRef.current = 0;
+     enemiesSpawnedRef.current = 0;
+     spawnTimerRef.current = 0;
+-  };
++  }, []);
+ 
+-  const upgradeTower = (towerId: number) => {
++  const upgradeTower = useCallback((towerId: number) => {
+     const tower = towers.find(t => t.id === towerId);
+     if (!tower || tower.level >= 5) return;
+     const cost = tower.level * 25;
+-    if (paint[tower.type] >= cost) {
+-      setPaint(prev => ({ ...prev, [tower.type]: prev[tower.type] - cost }));
++    const baseType = tower.baseType;
++    if (paint[baseType] >= cost) {
++      setPaint(prev => ({ ...prev, [baseType]: prev[baseType] - cost }));
+       setTowers(prev => prev.map(t =>
+         t.id === towerId
+           ? { ...t, level: t.level + 1, damage: Math.floor(t.damage * 1.4), range: t.range + 0.2 }
+           : t
+       ));
+     }
+-  };
++  }, [towers, paint]);
+ 
+   return (
+     <div className="min-h-screen bg-amber-50 flex flex-col items-center justify-center p-4"
+@@ -466,110 +983,108 @@ export default function CanvasDefender() {
+       {gameState === 'menu' && (
+         <div className="text-center bg-white rounded-3xl shadow-2xl p-8 border-4 border-dashed border-amber-400 max-w-lg transform rotate-1">
+           <div className="transform -rotate-1">
+-            <h1 className="text-5xl font-bold text-amber-700 mb-2" 
+-                style={{ fontFamily: 'cursive', textShadow: '3px 3px 0 #fcd34d' }}>
++            <h1 className="text-4xl font-bold text-amber-700 mb-2" style={{ fontFamily: 'cursive', textShadow: '3px 3px 0 #fcd34d' }}>
+               🎨 绘世守护者
+             </h1>
+-            <p className="text-amber-600 mb-6 text-lg italic">Canvas Defender</p>
++            <p className="text-amber-600 mb-4 text-lg italic">Canvas Defender - 元素觉醒版</p>
++            
++            <div className="mb-4 p-4 bg-gradient-to-br from-amber-50 to-orange-50 rounded-2xl border-2 border-amber-200 text-left">
++              <h3 className="font-bold text-amber-800 mb-2 text-lg flex items-center">
++                ✨ 新特性
++              </h3>
++              <div className="text-amber-700 space-y-1 text-sm">
++                <p>🔥 红色: 灼烧持续伤害</p>
++                <p>❄️ 蓝色: 冻结停止移动</p>
++                <p>⚡ 黄色: 电击连锁传导</p>
++                <p>💜 红+蓝融合: 腐蚀降低抗性</p>
++                <p>🧡 红+黄融合: 爆裂范围爆炸</p>
++                <p>💚 蓝+黄融合: 弹射+减速</p>
++                <p>⚪ 三色融合: 终极核心塔</p>
++              </div>
++            </div>
+             
+-            <div className="mb-6 p-5 bg-gradient-to-br from-amber-50 to-orange-50 rounded-2xl border-2 border-amber-200 text-left">
+-              <h3 className="font-bold text-amber-800 mb-3 text-lg flex items-center">
+-                📜 游戏说明
++            <div className="mb-6 p-3 bg-gradient-to-br from-blue-50 to-purple-50 rounded-2xl border-2 border-blue-200 text-left">
++              <h3 className="font-bold text-blue-800 mb-2 text-lg flex items-center">
++                ⚡ 元素反应
+               </h3>
+-              <ul className="text-amber-700 space-y-2 text-sm">
+-                <li className="flex items-start gap-2">
+-                  <span className="text-red-500">🔴</span>
+-                  <span><strong>红色颜料塔</strong>：高伤害单体攻击</span>
+-                </li>
+-                <li className="flex items-start gap-2">
+-                  <span className="text-blue-500">🔵</span>
+-                  <span><strong>蓝色颜料塔</strong>：范围减速效果</span>
+-                </li>
+-                <li className="flex items-start gap-2">
+-                  <span className="text-yellow-500">🟡</span>
+-                  <span><strong>黄色颜料塔</strong>：穿透攻击多个敌人</span>
+-                </li>
+-              </ul>
+-              <div className="mt-4 pt-3 border-t border-amber-200">
+-                <p className="text-amber-600 text-xs">💡 击败颜料怪获得颜料精华，用于建造更多防御塔！</p>
++              <div className="text-blue-700 space-y-1 text-sm">
++                <p>💨 冻结+红色 = 蒸汽爆发</p>
++                <p>💎 灼烧+蓝色 = 冷却脆化</p>
++                <p>🔗 电击+黄色 = 连锁导电</p>
+               </div>
+             </div>
+             
+             <button
+               onClick={startGame}
+-              className="px-10 py-4 bg-gradient-to-r from-amber-500 to-orange-500 text-white rounded-2xl text-2xl font-bold hover:from-amber-600 hover:to-orange-600 transition-all transform hover:scale-105 shadow-lg active:scale-95"
+-            >
+-              ✏️ 开始绘制冒险！
++              className="px-10 py-4 bg-gradient-to-r from-amber-500 to-orange-500 text-white rounded-2xl text-xl font-bold hover:from-amber-600 hover:to-orange-600 transition-all transform hover:scale-105 shadow-lg active:scale-95">
++              ✏️ 开始绘制冒险!
+             </button>
+           </div>
+         </div>
+       )}
+ 
+       {(gameState === 'playing' || gameState === 'paused') && (
+-        <div className="flex flex-wrap gap-4 justify-center">
+-          <div className="bg-white rounded-2xl p-4 shadow-xl border-2 border-amber-300 w-56">
+-            <h3 className="font-bold text-amber-800 mb-3 text-center text-lg border-b-2 border-dashed border-amber-200 pb-2">
++        <div className="flex flex-wrap gap-3 justify-center">
++          <div className="bg-white rounded-2xl p-3 shadow-xl border-2 border-amber-300 w-52">
++            <h3 className="font-bold text-amber-800 mb-2 text-center text-lg border-b-2 border-dashed border-amber-200 pb-1">
+               🎨 颜料精华
+             </h3>
+             
+-            <div className="space-y-3 mb-4">
+-              <div className="flex items-center gap-2 p-2 bg-red-50 rounded-lg">
+-                <div className="w-6 h-6 rounded-full bg-red-500 shadow-inner"></div>
++            <div className="space-y-2 mb-3">
++              <div className="flex items-center gap-2 p-1.5 bg-red-50 rounded-lg">
++                <div className="w-5 h-5 rounded-full bg-red-500 shadow-inner"></div>
+                 <div className="flex-1">
+                   <div className="text-xs text-red-600 font-medium">红色</div>
+-                  <div className="h-2 bg-red-200 rounded-full overflow-hidden">
++                  <div className="h-1.5 bg-red-200 rounded-full overflow-hidden">
+                     <div className="h-full bg-red-500 transition-all" style={{ width: `${Math.min(100, paint.red)}%` }}></div>
+                   </div>
+                 </div>
+-                <span className="font-bold text-red-600 w-8 text-right">{paint.red}</span>
++                <span className="font-bold text-red-600 w-7 text-right text-sm">{paint.red}</span>
+               </div>
+-              <div className="flex items-center gap-2 p-2 bg-blue-50 rounded-lg">
+-                <div className="w-6 h-6 rounded-full bg-blue-500 shadow-inner"></div>
++              <div className="flex items-center gap-2 p-1.5 bg-blue-50 rounded-lg">
++                <div className="w-5 h-5 rounded-full bg-blue-500 shadow-inner"></div>
+                 <div className="flex-1">
+                   <div className="text-xs text-blue-600 font-medium">蓝色</div>
+-                  <div className="h-2 bg-blue-200 rounded-full overflow-hidden">
++                  <div className="h-1.5 bg-blue-200 rounded-full overflow-hidden">
+                     <div className="h-full bg-blue-500 transition-all" style={{ width: `${Math.min(100, paint.blue)}%` }}></div>
+                   </div>
+                 </div>
+-                <span className="font-bold text-blue-600 w-8 text-right">{paint.blue}</span>
++                <span className="font-bold text-blue-600 w-7 text-right text-sm">{paint.blue}</span>
+               </div>
+-              <div className="flex items-center gap-2 p-2 bg-yellow-50 rounded-lg">
+-                <div className="w-6 h-6 rounded-full bg-yellow-500 shadow-inner"></div>
++              <div className="flex items-center gap-2 p-1.5 bg-yellow-50 rounded-lg">
++                <div className="w-5 h-5 rounded-full bg-yellow-500 shadow-inner"></div>
+                 <div className="flex-1">
+                   <div className="text-xs text-yellow-600 font-medium">黄色</div>
+-                  <div className="h-2 bg-yellow-200 rounded-full overflow-hidden">
++                  <div className="h-1.5 bg-yellow-200 rounded-full overflow-hidden">
+                     <div className="h-full bg-yellow-500 transition-all" style={{ width: `${Math.min(100, paint.yellow)}%` }}></div>
+                   </div>
+                 </div>
+-                <span className="font-bold text-yellow-600 w-8 text-right">{paint.yellow}</span>
++                <span className="font-bold text-yellow-600 w-7 text-right text-sm">{paint.yellow}</span>
+               </div>
+             </div>
+ 
+-            <h3 className="font-bold text-amber-800 mb-2 text-center border-b-2 border-dashed border-amber-200 pb-2">
++            <h3 className="font-bold text-amber-800 mb-2 text-center border-b-2 border-dashed border-amber-200 pb-1">
+               ✏️ 绘制防御塔
+             </h3>
+             
+-            <div className="space-y-2 mb-4">
++            <div className="space-y-1.5 mb-3">
+               {(['red', 'blue', 'yellow'] as const).map(type => (
+                 <button
+                   key={type}
+                   onClick={() => setSelectedTowerType(selectedTowerType === type ? null : type)}
+-                  className={`w-full p-2 rounded-xl border-2 transition-all flex items-center gap-2 ${
++                  className={`w-full p-1.5 rounded-xl border-2 transition-all flex items-center gap-2 ${
+                     selectedTowerType === type
+-                      ? 'border-gray-800 shadow-lg scale-105'
++                      ? 'border-gray-800 shadow-md scale-105'
+                       : 'border-gray-200 hover:border-gray-400'
+                   }`}
+-                  style={{
+-                    background: `linear-gradient(135deg, ${getColorValue(type)}30, white)`,
+-                  }}
+-                >
+-                  <div className={`w-10 h-10 rounded-lg border-2 flex items-center justify-center text-xl ${getStyleClass(selectedStyle)}`}
++                  style={{ background: `linear-gradient(135deg, ${getColorValue(type)}30, white)` }}>
++                  <div className={`w-8 h-8 rounded-lg border-2 flex items-center justify-center text-sm ${getStyleClass(selectedStyle)}`}
+                        style={{ backgroundColor: getColorValue(type) }}>
+                     {selectedStyle === 'pencil' ? '✏️' : selectedStyle === 'watercolor' ? '💧' : '🖌️'}
+                   </div>
+                   <div className="text-left flex-1">
+-                    <div className="text-sm font-bold" style={{ color: getColorValue(type) }}>
+-                      {type === 'red' ? '烈焰塔' : type === 'blue' ? '寒冰塔' : '雷电塔'}
++                    <div className="text-xs font-bold" style={{ color: getColorValue(type) }}>
++                      {getTowerName(type)}
+                     </div>
+                     <div className="text-xs text-gray-500">消耗 {TOWER_COSTS[type][type]} 精华</div>
+                   </div>
+@@ -577,49 +1092,54 @@ export default function CanvasDefender() {
+               ))}
+             </div>
+ 
+-            <h3 className="font-bold text-amber-800 mb-2 text-center border-b-2 border-dashed border-amber-200 pb-2">
++            <h3 className="font-bold text-amber-800 mb-1.5 text-center border-b-2 border-dashed border-amber-200 pb-1">
+               🖌️ 笔触风格
+             </h3>
+             
+-            <div className="grid grid-cols-3 gap-1 mb-4">
++            <div className="grid grid-cols-3 gap-1 mb-3">
+               {(['pencil', 'watercolor', 'oil'] as const).map(style => (
+                 <button
+                   key={style}
+                   onClick={() => setSelectedStyle(style)}
+-                  className={`p-2 rounded-lg text-xs font-medium transition-all ${
++                  className={`p-1.5 rounded-lg text-xs font-medium transition-all ${
+                     selectedStyle === style
+                       ? 'bg-amber-400 text-amber-900 shadow-md'
+                       : 'bg-amber-100 text-amber-700 hover:bg-amber-200'
+-                  }`}
+-                >
+-                  {style === 'pencil' ? '✏️铅笔' : style === 'watercolor' ? '💧水彩' : '🖌️油画'}
++                  }`}>
++                  {style === 'pencil' ? '✏️' : style === 'watercolor' ? '💧' : '🖌️'}
+                 </button>
+               ))}
+             </div>
+ 
+-            <div className="text-xs text-amber-600 bg-amber-50 p-2 rounded-lg text-center">
+-              💡 点击画布空白处放置防御塔
++            <div className="text-xs text-amber-600 bg-amber-50 p-1.5 rounded-lg text-center">
++              💡 相邻异色塔自动融合!
+             </div>
+           </div>
+ 
+           <div className="flex flex-col items-center">
+-            <div className="flex items-center gap-6 mb-2 bg-white px-6 py-2 rounded-full shadow-lg border-2 border-amber-300">
++            <div className="flex items-center gap-4 mb-2 bg-white px-5 py-1.5 rounded-full shadow-lg border-2 border-amber-300">
+               <div className="text-amber-800 font-bold flex items-center gap-1">
+-                <span className="text-xl">🌊</span>
+-                <span>波次 {wave}/10</span>
++                <span className="text-lg">🌊</span>
++                <span className="text-sm">波次 {wave}/10</span>
+               </div>
+               <div className="text-red-600 font-bold flex items-center gap-1">
+-                <span className="text-xl">❤️</span>
+-                <span>{coreHealth}</span>
++                <span className="text-lg">❤️</span>
++                <span className="text-sm">{coreHealth}</span>
+               </div>
+               <div className="text-amber-600 font-bold flex items-center gap-1">
+-                <span className="text-xl">⭐</span>
+-                <span>{score}</span>
++                <span className="text-lg">⭐</span>
++                <span className="text-sm">{score}</span>
+               </div>
+               <div className="text-green-600 font-bold flex items-center gap-1">
+-                <span className="text-xl">💀</span>
+-                <span>{enemiesKilled}</span>
++                <span className="text-lg">💀</span>
++                <span className="text-sm">{enemiesKilled}</span>
+               </div>
++              {currentChainCount > 0 && (
++                <div className="text-purple-600 font-bold flex items-center gap-1 animate-pulse">
++                  <span className="text-lg">🔗</span>
++                  <span className="text-sm">x{currentChainCount}</span>
++                </div>
++              )}
+             </div>
+ 
+             <div className="relative bg-white rounded-xl shadow-2xl border-4 border-amber-400 overflow-hidden"
+@@ -650,18 +1170,6 @@ export default function CanvasDefender() {
+                       strokeLinecap="round"
+                       opacity="0.7"
+                     />
+-                    {(() => {
+-                      const angle = Math.atan2(line.y2 - line.y1, line.x2 - line.x1);
+-                      const midX = (line.x1 + line.x2) / 2;
+-                      const midY = (line.y1 + line.y2) / 2;
+-                      return (
+-                        <polygon
+-                          points={`${midX + Math.cos(angle) * 8},${midY + Math.sin(angle) * 8} ${midX + Math.cos(angle + 2.5) * 8},${midY + Math.sin(angle + 2.5) * 8} ${midX + Math.cos(angle - 2.5) * 8},${midY + Math.sin(angle - 2.5) * 8}`}
+-                          fill="#8B4513"
+-                          opacity="0.6"
+-                        />
+-                      );
+-                    })()}
+                   </g>
+                 ))}
+               </svg>
+@@ -697,20 +1205,6 @@ export default function CanvasDefender() {
+                 </div>
+               </div>
+ 
+-              <div className="absolute flex items-center justify-center z-10"
+-                   style={{ left: -10, top: PATH[0].y * CELL_SIZE - 5, width: CELL_SIZE + 20, height: CELL_SIZE + 10 }}>
+-                <div className="bg-gradient-to-r from-red-500 to-orange-500 text-white px-3 py-1 rounded-full text-xs font-bold shadow-lg flex items-center gap-1 animate-pulse">
+-                  🚪 入口
+-                </div>
+-              </div>
+-
+-              <div className="absolute flex items-center justify-center z-10"
+-                   style={{ left: CORE_POSITION.x * CELL_SIZE - 10, top: CORE_POSITION.y * CELL_SIZE - 25, width: CELL_SIZE + 20 }}>
+-                <div className="bg-gradient-to-r from-purple-500 to-pink-500 text-white px-3 py-1 rounded-full text-xs font-bold shadow-lg flex items-center gap-1">
+-                  💎 画布核心
+-                </div>
+-              </div>
+-
+               {Array.from({ length: GRID_SIZE * GRID_SIZE }).map((_, i) => {
+                 const x = i % GRID_SIZE;
+                 const y = Math.floor(i / GRID_SIZE);
+@@ -755,7 +1249,7 @@ export default function CanvasDefender() {
+                          backgroundColor: getColorValue(tower.type),
+                        }} />
+                   
+-                  <div className={`w-10 h-10 flex items-center justify-center transition-transform hover:scale-110 shadow-lg ${getStyleClass(tower.style)}`}
++                  <div className={`w-9 h-9 flex items-center justify-center transition-transform hover:scale-110 shadow-lg ${getStyleClass(tower.style)} ${tower.isFused ? 'ring-2 ring-yellow-400 animate-pulse' : ''}`}
+                        style={{ 
+                          background: `linear-gradient(135deg, ${getColorValue(tower.type)}dd, ${getColorValue(tower.type)})`,
+                          borderRadius: tower.style === 'oil' ? '30% 70% 70% 30% / 30% 30% 70% 70%' : 
+@@ -763,8 +1257,8 @@ export default function CanvasDefender() {
+                          boxShadow: `0 4px 12px ${getColorValue(tower.type)}60, inset 0 0 10px rgba(255,255,255,0.3)`,
+                          border: tower.style === 'pencil' ? '2px dashed #333' : `3px solid ${getColorValue(tower.type)}`,
+                        }}>
+-                    <span className="text-lg text-white font-bold drop-shadow-lg">
+-                      {tower.style === 'pencil' ? '✏️' : tower.style === 'watercolor' ? '💧' : '🖌️'}
++                    <span className="text-sm text-white font-bold drop-shadow-lg">
++                      {tower.isFused ? '✨' : tower.style === 'pencil' ? '✏️' : tower.style === 'watercolor' ? '💧' : '🖌️'}
+                       {tower.level}
+                     </span>
+                   </div>
+@@ -780,10 +1274,17 @@ export default function CanvasDefender() {
+                      className="absolute flex flex-col items-center"
+                      style={{
+                        left: enemy.x - 18,
+-                       top: enemy.y - 24,
++                       top: enemy.y - 28,
+                        transition: 'none',
+                      }}>
+-                  <div className="w-9 h-1.5 bg-gray-200 rounded-full overflow-hidden mb-1 border border-gray-300">
++                  <div className="flex gap-0.5 mb-0.5">
++                    {enemy.statuses.slice(0, 3).map(status => (
++                      <span key={status.id} className="text-xs animate-pulse">
++                        {getStatusIcon(status.type)}
++                      </span>
++                    ))}
++                  </div>
++                  <div className="w-9 h-1.5 bg-gray-200 rounded-full overflow-hidden mb-0.5 border border-gray-300">
+                     <div className="h-full transition-all"
+                          style={{
+                            width: `${(enemy.health / enemy.maxHealth) * 100}%`,
+@@ -791,26 +1292,42 @@ export default function CanvasDefender() {
+                          }} />
+                   </div>
+                   
+-                  <div className="w-9 h-9 rounded-full flex items-center justify-center"
++                  <div className={`w-9 h-9 rounded-full flex items-center justify-center ${enemy.statuses.some(s => s.type === 'frozen') ? 'opacity-70' : ''}`}
+                        style={{
+                          background: `radial-gradient(circle at 30% 30%, ${enemy.color}cc, ${enemy.color})`,
+                          boxShadow: `0 0 12px ${enemy.color}80, inset -2px -2px 6px rgba(0,0,0,0.3), inset 2px 2px 6px rgba(255,255,255,0.3)`,
+-                         border: '2px dashed rgba(0,0,0,0.2)',
+-                         animation: 'wobble 0.6s ease-in-out infinite',
++                         border: enemy.statuses.some(s => s.type === 'frozen') ? '3px solid #3498db' : '2px dashed rgba(0,0,0,0.2)',
++                         animation: enemy.statuses.some(s => s.type === 'frozen') ? 'none' : 'wobble 0.6s ease-in-out infinite',
+                        }}>
+                     <span className="text-base drop-shadow">🎨</span>
+                   </div>
+                 </div>
+               ))}
+ 
++              {reactions.map(reaction => (
++                <div key={reaction.id}
++                     className="absolute pointer-events-none animate-ping"
++                     style={{
++                       left: reaction.x - 25,
++                       top: reaction.y - 25,
++                       width: 50,
++                       height: 50,
++                       fontSize: '24px',
++                       textAlign: 'center',
++                       lineHeight: '50px',
++                     }}>
++                  {reaction.type === 'steamBurst' ? '💨' : reaction.type === 'coolingBrittle' ? '💎' : '🔗'}
++                </div>
++              ))}
++
+               {projectiles.map(proj => (
+                 <div key={proj.id}
+                      className="absolute rounded-full"
+                      style={{
+                        left: proj.x - 6,
+                        top: proj.y - 6,
+-                       width: proj.type === 'pierce' ? 14 : 12,
+-                       height: proj.type === 'pierce' ? 14 : 12,
++                       width: proj.type === 'pierce' || proj.type === 'explosive' ? 14 : 12,
++                       height: proj.type === 'pierce' || proj.type === 'explosive' ? 14 : 12,
+                        background: `radial-gradient(circle, white, ${proj.color})`,
+                        boxShadow: `0 0 12px ${proj.color}, 0 0 20px ${proj.color}50`,
+                        border: proj.type === 'slow' ? '2px dashed white' : 'none',
+@@ -827,96 +1344,176 @@ export default function CanvasDefender() {
+                        height: p.size,
+                        background: `radial-gradient(circle, ${p.color}, ${p.color}80)`,
+                        opacity: p.life / 50,
+-                       filter: 'blur(0.5px)',
++                       filter: p.type === 'reaction' ? 'blur(1px)' : 'blur(0.5px)',
+                      }} />
+               ))}
+             </div>
+ 
+-            <div className="flex gap-3 mt-3">
++            <div className="flex gap-2 mt-2">
+               {!waveInProgress ? (
+                 <button onClick={startWave}
+-                        className="px-6 py-3 bg-gradient-to-r from-green-500 to-emerald-500 text-white rounded-full font-bold hover:from-green-600 hover:to-emerald-600 transition-all transform hover:scale-105 shadow-lg">
++                        className="px-5 py-2 bg-gradient-to-r from-green-500 to-emerald-500 text-white rounded-full font-bold hover:from-green-600 hover:to-emerald-600 transition-all transform hover:scale-105 shadow-lg text-sm">
+                   🚀 开始第 {wave} 波 {wave > 1 && `(+10全部精华)`}
+                 </button>
+               ) : (
+-                <div className="px-6 py-3 bg-orange-500 text-white rounded-full font-bold shadow-lg animate-pulse">
++                <div className="px-5 py-2 bg-orange-500 text-white rounded-full font-bold shadow-lg animate-pulse text-sm">
+                   ⚔️ 战斗中... ({enemies.length}只颜料怪)
+                 </div>
+               )}
+               
+               {!waveInProgress && wave < 10 && enemies.length === 0 && (
+                 <button onClick={() => setWave(w => w + 1)}
+-                        className="px-4 py-3 bg-blue-500 text-white rounded-full font-bold hover:bg-blue-600 transition-all shadow-lg">
++                        className="px-4 py-2 bg-blue-500 text-white rounded-full font-bold hover:bg-blue-600 transition-all shadow-lg text-sm">
+                   ⏩ 跳过
+                 </button>
+               )}
+               
+               <button onClick={() => setGameState(gameState === 'paused' ? 'playing' : 'paused')}
+-                      className="px-4 py-3 bg-amber-500 text-white rounded-full font-bold hover:bg-amber-600 transition-all shadow-lg">
++                      className="px-4 py-2 bg-amber-500 text-white rounded-full font-bold hover:bg-amber-600 transition-all shadow-lg text-sm">
+                 {gameState === 'paused' ? '▶️ 继续' : '⏸️ 暂停'}
+               </button>
+             </div>
+           </div>
+ 
+-          <div className="bg-white rounded-2xl p-4 shadow-xl border-2 border-amber-300 w-52">
+-            <h3 className="font-bold text-amber-800 mb-3 text-center text-lg border-b-2 border-dashed border-amber-200 pb-2">
+-              📖 图鉴收集
+-            </h3>
+-            
+-            <div className="grid grid-cols-3 gap-2 mb-4">
+-              {(['red', 'blue', 'yellow'] as const).map(type => 
+-                (['pencil', 'watercolor', 'oil'] as const).map(style => {
+-                  const key = `${type}-${style}`;
+-                  const collected = collectedTowers.has(key);
+-                  return (
+-                    <div key={key}
+-                         className={`aspect-square rounded-lg border-2 flex flex-col items-center justify-center transition-all ${
+-                           collected ? `${getStyleClass(style)} shadow-md` : 'bg-gray-100 border-gray-200'
+-                         }`}
+-                         style={{ backgroundColor: collected ? getColorValue(type) : '#f3f4f6' }}
+-                         title={collected ? `${type}-${style}` : '未收集'}>
+-                      <span className="text-lg">
+-                        {collected ? (
+-                          style === 'pencil' ? '✏️' : style === 'watercolor' ? '💧' : '🖌️'
+-                        ) : '❓'}
+-                      </span>
+-                    </div>
+-                  );
+-                })
+-              )}
+-            </div>
+-            
+-            <div className="text-center text-sm text-amber-600 bg-amber-50 py-2 rounded-lg mb-4">
+-              已收集: {collectedTowers.size} / 9
+-            </div>
+-
+-            <h4 className="font-bold text-amber-800 mb-2 text-sm border-b border-dashed border-amber-200 pb-1">
+-              📊 战斗统计
+-            </h4>
+-            
+-            <div className="space-y-2 text-sm">
+-              <div className="flex justify-between items-center p-1.5 bg-red-50 rounded-lg">
+-                <span className="text-gray-600">消灭敌人</span>
+-                <span className="font-bold text-red-600">{enemiesKilled}</span>
++          <div className="flex flex-col gap-2">
++            <div className="bg-white rounded-2xl p-3 shadow-xl border-2 border-amber-300 w-56">
++              <div className="flex justify-between items-center mb-2">
++                <h3 className="font-bold text-amber-800 text-sm">📖 图鉴收集</h3>
++                <button 
++                  onClick={() => setShowDebugPanel(!showDebugPanel)}
++                  className="text-xs bg-gray-200 px-2 py-0.5 rounded hover:bg-gray-300">
++                  {showDebugPanel ? '隐藏' : '显示'}调试
++                </button>
+               </div>
+-              <div className="flex justify-between items-center p-1.5 bg-amber-50 rounded-lg">
+-                <span className="text-gray-600">获得分数</span>
+-                <span className="font-bold text-amber-600">{score}</span>
++              
++              <div className="grid grid-cols-3 gap-1 mb-2">
++                {(['red', 'blue', 'yellow'] as const).map(type =>
++                  (['pencil', 'watercolor', 'oil'] as const).map(style => {
++                    const key = `${type}-${style}`;
++                    const collected = collectedTowers.has(key);
++                    return (
++                      <div key={key}
++                           className={`aspect-square rounded-lg border-2 flex flex-col items-center justify-center transition-all ${
++                             collected ? `${getStyleClass(style)} shadow-md` : 'bg-gray-100 border-gray-200'
++                           }`}
++                           style={{ backgroundColor: collected ? getColorValue(type) : '#f3f4f6' }}
++                           title={collected ? `${type}-${style}` : '未收集'}>
++                        <span className="text-sm">
++                          {collected ? (
++                            style === 'pencil' ? '✏️' : style === 'watercolor' ? '💧' : '🖌️'
++                          ) : '❓'}
++                        </span>
++                      </div>
++                    );
++                  })
++                )}
+               </div>
+-              <div className="flex justify-between items-center p-1.5 bg-blue-50 rounded-lg">
+-                <span className="text-gray-600">防御塔数</span>
+-                <span className="font-bold text-blue-600">{towers.length}</span>
++
++              <div className="text-center text-xs text-amber-600 bg-amber-50 py-1 rounded mb-2">
++                已收集: {collectedTowers.size} / 9
+               </div>
++
++              {showDebugPanel && (
++                <>
++                  <h4 className="font-bold text-amber-800 mb-1 text-sm border-b border-dashed border-amber-200 pb-1">
++                    📊 战斗统计
++                  </h4>
++                  
++                  <div className="space-y-1 text-xs mb-2">
++                    <div className="flex justify-between items-center p-1 bg-red-50 rounded">
++                      <span className="text-gray-600">消灭敌人</span>
++                      <span className="font-bold text-red-600">{enemiesKilled}</span>
++                    </div>
++                    <div className="flex justify-between items-center p-1 bg-amber-50 rounded">
++                      <span className="text-gray-600">获得分数</span>
++                      <span className="font-bold text-amber-600">{score}</span>
++                    </div>
++                    <div className="flex justify-between items-center p-1 bg-green-50 rounded">
++                      <span className="text-gray-600">最高连锁</span>
++                      <span className="font-bold text-green-600">{maxChainCount}</span>
++                    </div>
++                  </div>
++
++                  {towers.length > 0 && (
++                    <>
++                      <h4 className="font-bold text-amber-800 mb-1 text-sm border-b border-dashed border-amber-200 pb-1">
++                        💥 塔伤害贡献
++                      </h4>
++                      <div className="space-y-1 text-xs mb-2 max-h-24 overflow-y-auto">
++                        {towers.map(tower => (
++                          <div key={tower.id} className="flex justify-between items-center p-1 rounded"
++                               style={{ backgroundColor: `${getColorValue(tower.type)}15` }}>
++                            <span className="flex items-center gap-1">
++                              {tower.isFused ? '✨' : '🏗️'} {getTowerName(tower.type)} Lv.{tower.level}
++                            </span>
++                            <span className="font-bold" style={{ color: getColorValue(tower.type) }}>
++                              {tower.damageContribution}
++                            </span>
++                          </div>
++                        ))}
++                      </div>
++                    </>
++                  )}
++
++                  <h4 className="font-bold text-amber-800 mb-1 text-sm border-b border-dashed border-amber-200 pb-1">
++                    📜 战斗日志
++                  </h4>
++                  <div className="space-y-0.5 text-xs max-h-40 overflow-y-auto bg-gray-50 rounded p-1">
++                    {battleLogs.length === 0 ? (
++                      <div className="text-gray-400 text-center py-2">暂无日志...</div>
++                    ) : (
++                      battleLogs.map(log => (
++                        <div key={log.id} className="flex items-center gap-1 py-0.5 px-1 rounded hover:bg-gray-100"
++                             style={{ color: log.color }}>
++                          <span className="opacity-70">•</span>
++                          <span className="truncate">{log.message}</span>
++                        </div>
++                      ))
++                    )}
++                  </div>
++                </>
++              )}
+             </div>
+ 
+-            <div className="mt-4 pt-2 border-t border-amber-200">
+-              <h4 className="font-bold text-amber-800 mb-2 text-sm">🎯 笔触效果</h4>
+-              <div className="text-xs text-gray-600 space-y-1">
+-                <p>✏️ <strong>铅笔</strong>: 攻速快</p>
+-                <p>💧 <strong>水彩</strong>: 平衡型</p>
+-                <p>🖌️ <strong>油画</strong>: 高伤害</p>
++            {enemies.length > 0 && showDebugPanel && (
++              <div className="bg-white rounded-2xl p-3 shadow-xl border-2 border-purple-300 w-56">
++                <h3 className="font-bold text-purple-800 mb-2 text-center text-sm border-b-2 border-dashed border-purple-200 pb-1">
++                  🎯 敌人状态
++                </h3>
++                <div className="space-y-1 max-h-48 overflow-y-auto">
++                  {enemies.map(enemy => (
++                    <div key={enemy.id} className="bg-gray-50 rounded p-1.5">
++                      <div className="flex justify-between items-center mb-1">
++                        <span className="text-xs font-bold" style={{ color: enemy.color }}>
++                          敌人 #{enemy.id}
++                        </span>
++                        <span className="text-xs text-gray-600">
++                          {Math.round(enemy.health)}/{enemy.maxHealth}
++                        </span>
++                      </div>
++                      <div className="w-full h-1.5 bg-gray-200 rounded-full overflow-hidden mb-1">
++                        <div className="h-full transition-all"
++                             style={{
++                               width: `${(enemy.health / enemy.maxHealth) * 100}%`,
++                               background: enemy.color,
++                             }} />
++                      </div>
++                      {enemy.statuses.length > 0 && (
++                        <div className="flex flex-wrap gap-0.5">
++                          {enemy.statuses.map(status => (
++                            <div key={status.id} className="flex items-center gap-0.5 bg-gray-100 rounded px-1 text-xs">
++                              <span>{getStatusIcon(status.type)}</span>
++                              <span>{status.stacks}x</span>
++                              <span className="text-gray-500">{Math.ceil(status.duration)}s</span>
++                            </div>
++                          ))}
++                        </div>
++                      )}
++                    </div>
++                  ))}
++                </div>
+               </div>
+-            </div>
++            )}
+           </div>
+         </div>
+       )}
+@@ -942,6 +1539,10 @@ export default function CanvasDefender() {
+                 <span>⭐ 最终分数</span>
+                 <span className="font-bold">{score}</span>
+               </div>
++              <div className="flex justify-between text-red-800">
++                <span>🔗 最高连锁</span>
++                <span className="font-bold">{maxChainCount}</span>
++              </div>
+               <div className="flex justify-between text-red-800">
+                 <span>📖 收集图鉴</span>
+                 <span className="font-bold">{collectedTowers.size}/9</span>
+@@ -960,9 +1561,9 @@ export default function CanvasDefender() {
+         <div className="text-center bg-white rounded-3xl shadow-2xl p-8 border-4 border-green-300 max-w-md transform rotate-1">
+           <div className="transform -rotate-1">
+             <h2 className="text-4xl font-bold text-green-600 mb-4" style={{ fontFamily: 'cursive' }}>
+-              🎉 画布已守护成功！
++              🎉 画布已守护成功!
+             </h2>
+-            <p className="text-green-400 mb-6">你成功击退了所有颜料怪的入侵！</p>
++            <p className="text-green-400 mb-6">你成功击退了所有颜料怪的入侵!</p>
+             
+             <div className="bg-gradient-to-br from-green-50 to-emerald-50 rounded-2xl p-4 mb-6 text-left space-y-2">
+               <div className="flex justify-between text-green-800">
+@@ -978,26 +1579,22 @@ export default function CanvasDefender() {
+                 <span className="font-bold">{score}</span>
+               </div>
+               <div className="flex justify-between text-green-800">
+-                <span>📖 收集图鉴</span>
+-                <span className="font-bold">{collectedTowers.size}/9</span>
++                <span>🔗 最高连锁</span>
++                <span className="font-bold">{maxChainCount}</span>
+               </div>
+               <div className="flex justify-between text-green-800">
+-                <span>❤️ 剩余生命</span>
+-                <span className="font-bold">{coreHealth}</span>
++                <span>📖 收集图鉴</span>
++                <span className="font-bold">{collectedTowers.size}/9</span>
+               </div>
+             </div>
+             
+             <button onClick={startGame}
+-                    className="px-8 py-4 bg-gradient-to-r from-green-500 to-emerald-500 text-white rounded-2xl text-xl font-bold hover:from-green-600 hover:to-emerald-600 transition-all transform hover:scale-105 shadow-lg">
+-              🎨 再来一局
++                    className="px-8 py-4 bg-gradient-to-r from-amber-500 to-orange-500 text-white rounded-2xl text-xl font-bold hover:from-amber-600 hover:to-orange-600 transition-all transform hover:scale-105 shadow-lg">
++              🎨 再来一局!
+             </button>
+           </div>
+         </div>
+       )}
+-
+-      <div className="mt-4 text-amber-600 text-sm opacity-70">
+-        🎨 绘世守护者 - 用画笔守护你的世界
+-      </div>
+     </div>
+   );
+ }
+\ No newline at end of file
