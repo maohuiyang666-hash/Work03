@@ -1,0 +1,18 @@
+diff --git a/repo/package.json b/repo/package.json
+index 4cd2d7f..10ce32f 100644
+--- a/repo/package.json
++++ b/repo/package.json
+@@ -6,10 +6,12 @@
+     "dev": "vite",
+     "build": "tsc && vite build",
+     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
+-    "preview": "vite preview"
++    "preview": "vite preview",
++    "e2e": "playwright test"
+   },
+   "dependencies": {
+     "@aidp/web-code-check": "^1.1.10",
++    "@playwright/test": "^1.58.2",
+     "playwright": "^1.58.2",
+     "react": "18.2.0",
+     "react-dom": "18.2.0"
