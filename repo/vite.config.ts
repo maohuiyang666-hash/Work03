@@ -1,15 +1,41 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+
 // https://vitejs.dev/config/
-export default defineConfig({
-  plugins: [react()],
-  server: {
-    port: 62248,   // 随机端口（由脚本生成）
-    strictPort: false,     // 若被占用，Vite 会继续找下一个可用端口
-    open: false
-  },
-  preview: {
-    port: 62248,            // 预览端口保持默认，可按需改为随机
-    strictPort: false
+export default defineConfig(({ command }) => {
+  const isGitHubPages = process.env.DEPLOY_TARGET === 'github-pages'
+  // GitHub Pages: repo=work02, subdir=code_files(2)
+  // 访问路径: https://<user>.github.io/work02/code_files(2)/
+  const base = isGitHubPages ? '/work02/code_files(2)/' : '/'
+
+  return {
+    plugins: [react()],
+    base,
+    server: {
+      port: 62248,
+      strictPort: false,
+      open: false,
+    },
+    preview: {
+      port: 62248,
+      strictPort: false,
+    },
+    build: {
+      outDir: 'dist',
+      sourcemap: command === 'build' ? 'hidden' : true,
+      chunkSizeWarningLimit: 800,
+      rollupOptions: {
+        output: {
+          manualChunks: {
+            'vendor-react': ['react', 'react-dom'],
+          },
+        },
+      },
+    },
+    define: {
+      __APP_VERSION__: JSON.stringify(process.env.npm_package_version || '0.1.0'),
+      __BUILD_TIME__: JSON.stringify(new Date().toISOString()),
+      __GIT_COMMIT__: JSON.stringify(process.env.GITHUB_SHA || 'dev'),
+    },
   }
 })
