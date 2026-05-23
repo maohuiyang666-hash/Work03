@@ -98,8 +98,8 @@ const TOWER_COSTS: Record<string, PaintEssence> = {
   yellow: { red: 0, blue: 0, yellow: 30 },
 };
 
-export default function CanvasDefender() {
-  const [gameState, setGameState] = useState<'menu' | 'playing' | 'paused' | 'gameOver' | 'victory'>('menu');
+export default function CanvasDefender({ initialGameState = 'menu' }: { initialGameState?: 'menu' | 'playing' | 'paused' | 'gameOver' | 'victory' } = {}) {
+  const [gameState, setGameState] = useState<'menu' | 'playing' | 'paused' | 'gameOver' | 'victory'>(initialGameState);
   const [wave, setWave] = useState(1);
   const [coreHealth, setCoreHealth] = useState(100);
   const [paint, setPaint] = useState<PaintEssence>({ red: 50, blue: 50, yellow: 50 });

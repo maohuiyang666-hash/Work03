@@ -1,0 +1,98 @@
+diff --git a/repo/package.json b/repo/package.json
+index 4cd2d7f..f5eb65d 100644
+--- a/repo/package.json
++++ b/repo/package.json
+@@ -4,8 +4,12 @@
+   "type": "module",
+   "scripts": {
+     "dev": "vite",
+-    "build": "tsc && vite build",
++    "typecheck": "tsc --noEmit",
+     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
++    "test": "vitest run",
++    "test:coverage": "vitest run --coverage",
++    "e2e": "playwright test",
++    "build": "tsc && vite build",
+     "preview": "vite preview"
+   },
+   "dependencies": {
+@@ -15,13 +19,25 @@
+     "react-dom": "18.2.0"
+   },
+   "devDependencies": {
++    "@playwright/test": "^1.41.0",
++    "@testing-library/jest-dom": "^6.4.2",
++    "@testing-library/react": "^14.2.1",
++    "@testing-library/user-event": "^14.5.2",
+     "@types/react": "^18.2.15",
+     "@types/react-dom": "^18.2.7",
++    "@typescript-eslint/eslint-plugin": "^6.0.0",
++    "@typescript-eslint/parser": "^6.0.0",
+     "@vitejs/plugin-react": "^4.0.3",
++    "@vitest/coverage-v8": "^1.2.2",
+     "autoprefixer": "^10.4.14",
++    "eslint": "^8.45.0",
++    "eslint-plugin-react-hooks": "^4.6.0",
++    "eslint-plugin-react-refresh": "^0.4.3",
++    "jsdom": "^24.0.0",
+     "postcss": "^8.4.27",
+     "tailwindcss": "^3.3.3",
+     "typescript": "^5.0.2",
+-    "vite": "^4.4.5"
++    "vite": "^4.4.5",
++    "vitest": "^1.2.2"
+   }
+ }
+diff --git a/repo/src/App.tsx b/repo/src/App.tsx
+index 4470419..3c414cb 100644
+--- a/repo/src/App.tsx
++++ b/repo/src/App.tsx
+@@ -98,8 +98,8 @@ const TOWER_COSTS: Record<string, PaintEssence> = {
+   yellow: { red: 0, blue: 0, yellow: 30 },
+ };
+ 
+-export default function CanvasDefender() {
+-  const [gameState, setGameState] = useState<'menu' | 'playing' | 'paused' | 'gameOver' | 'victory'>('menu');
++export default function CanvasDefender({ initialGameState = 'menu' }: { initialGameState?: 'menu' | 'playing' | 'paused' | 'gameOver' | 'victory' } = {}) {
++  const [gameState, setGameState] = useState<'menu' | 'playing' | 'paused' | 'gameOver' | 'victory'>(initialGameState);
+   const [wave, setWave] = useState(1);
+   const [coreHealth, setCoreHealth] = useState(100);
+   const [paint, setPaint] = useState<PaintEssence>({ red: 50, blue: 50, yellow: 50 });
+diff --git a/repo/tsconfig.json b/repo/tsconfig.json
+index dd12918..366c7eb 100644
+--- a/repo/tsconfig.json
++++ b/repo/tsconfig.json
+@@ -7,6 +7,7 @@
+       "DOM",
+       "DOM.Iterable"
+     ],
++    "types": ["vitest/globals", "@testing-library/jest-dom"],
+     "module": "ESNext",
+     "skipLibCheck": true,
+     "moduleResolution": "bundler",
+diff --git a/repo/vite.config.ts b/repo/vite.config.ts
+index 3cfcb7e..8bff095 100644
+--- a/repo/vite.config.ts
++++ b/repo/vite.config.ts
+@@ -1,4 +1,4 @@
+-import { defineConfig } from 'vite'
++import { defineConfig } from 'vitest/config'
+ import react from '@vitejs/plugin-react'
+ // https://vitejs.dev/config/
+ export default defineConfig({
+@@ -11,5 +11,13 @@ export default defineConfig({
+   preview: {
+     port: 62248,            // 预览端口保持默认，可按需改为随机
+     strictPort: false
+-  }
++  },
++  test: {
++    globals: true,
++    environment: 'jsdom',
++    setupFiles: './src/setupTests.ts',
++    coverage: {
++      reporter: ['text', 'json', 'html'],
++    },
++  },
+ })
+\ No newline at end of file
