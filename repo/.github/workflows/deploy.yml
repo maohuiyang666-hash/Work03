@@ -1,0 +1,85 @@
+name: Build & Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    name: Quality Gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 18
+          cache: npm
+          cache-dependency-path: code_files(2)/package-lock.json
+
+      - name: Install
+        working-directory: code_files(2)
+        run: npm ci
+
+      - name: Lint
+        working-directory: code_files(2)
+        run: npm run lint --if-present || true
+
+      - name: Type Check
+        working-directory: code_files(2)
+        run: npx tsc --noEmit
+
+  build:
+    name: Build
+    needs: ci
+    runs-on: ubuntu-latest
+    env:
+      NODE_ENV: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 18
+          cache: npm
+          cache-dependency-path: code_files(2)/package-lock.json
+
+      - name: Install
+        working-directory: code_files(2)
+        run: npm ci
+
+      - name: Build
+        working-directory: code_files(2)
+        run: npm run build
+
+      - name: Check Build
+        working-directory: code_files(2)
+        run: node scripts/check-build.mjs
+
+      - name: Upload Artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: code_files(2)/dist
+
+  deploy:
+    name: Deploy
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
