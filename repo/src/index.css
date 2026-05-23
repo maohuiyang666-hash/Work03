@@ -1,0 +1,32 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@keyframes wobble {
+  0%, 100% { transform: rotate(-3deg) scale(1); }
+  50% { transform: rotate(3deg) scale(1.05); }
+}
+
+@keyframes brushStroke {
+  0%, 100% { transform: scale(1) rotate(0deg); }
+  25% { transform: scale(1.02) rotate(1deg); }
+  75% { transform: scale(0.98) rotate(-1deg); }
+}
+
+@keyframes paintDrop {
+  0% { transform: translateY(-5px) scale(0.8); opacity: 0; }
+  50% { opacity: 1; }
+  100% { transform: translateY(0) scale(1); opacity: 1; }
+}
+
+.tower-brush {
+  animation: brushStroke 2s ease-in-out infinite;
+}
+
+.paint-drop {
+  animation: paintDrop 0.3s ease-out;
+}
+
+* {
+  -webkit-font-smoothing: antialiased;
+}
