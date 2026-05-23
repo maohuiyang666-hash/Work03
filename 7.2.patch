@@ -1,0 +1,57 @@
+diff --git a/repo/package-lock.json b/repo/package-lock.json
+index 194ae3b..1bba3e0 100644
+--- a/repo/package-lock.json
++++ b/repo/package-lock.json
+@@ -14,6 +14,7 @@
+         "react-dom": "18.2.0"
+       },
+       "devDependencies": {
++        "@playwright/test": "^1.58.2",
+         "@types/react": "^18.2.15",
+         "@types/react-dom": "^18.2.7",
+         "@vitejs/plugin-react": "^4.0.3",
+@@ -70,6 +71,22 @@
+         "node": ">=14.17"
+       }
+     },
++    "node_modules/@playwright/test": {
++      "version": "1.58.2",
++      "resolved": "https://registry.npmjs.org/@playwright/test/-/test-1.58.2.tgz",
++      "integrity": "sha512-akea+6bHYBBfA9uQqSYmlJXn61cTa+jbO87xVLCWbTqbWadRVmhxlXATaOjOgcBaWU4ePo0wB41KMFv3o35IXA==",
++      "dev": true,
++      "license": "Apache-2.0",
++      "dependencies": {
++        "playwright": "1.58.2"
++      },
++      "bin": {
++        "playwright": "cli.js"
++      },
++      "engines": {
++        "node": ">=18"
++      }
++    },
+     "node_modules/@alloc/quick-lru": {
+       "version": "5.2.0",
+       "resolved": "https://bnpm.byted.org/@alloc/quick-lru/-/quick-lru-5.2.0.tgz",
+diff --git a/repo/package.json b/repo/package.json
+index 4cd2d7f..653467c 100644
+--- a/repo/package.json
++++ b/repo/package.json
+@@ -6,7 +6,8 @@
+     "dev": "vite",
+     "build": "tsc && vite build",
+     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
+-    "preview": "vite preview"
++    "preview": "vite preview",
++    "e2e": "playwright test"
+   },
+   "dependencies": {
+     "@aidp/web-code-check": "^1.1.10",
+@@ -15,6 +16,7 @@
+     "react-dom": "18.2.0"
+   },
+   "devDependencies": {
++    "@playwright/test": "^1.58.2",
+     "@types/react": "^18.2.15",
+     "@types/react-dom": "^18.2.7",
+     "@vitejs/plugin-react": "^4.0.3",
